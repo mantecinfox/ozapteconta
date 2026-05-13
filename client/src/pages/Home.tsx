@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button';
-import { ArrowRight, CheckCircle2, Lock, Zap, AlertCircle, TrendingUp, Users, DollarSign, Target, Shield } from 'lucide-react';
+import { ArrowRight, CheckCircle2, TrendingUp } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
 /**
@@ -11,16 +11,16 @@ import { useState, useEffect } from 'react';
 
 export default function Home() {
   const [email, setEmail] = useState('');
-  const [activeUsers, setActiveUsers] = useState(2847);
-  const [totalSavings, setTotalSavings] = useState(12500000);
-  const [spotsLeft, setSpotsLeft] = useState(156);
+  const [activeUsers, setActiveUsers] = useState(187);
+  const [totalSavings, setTotalSavings] = useState(86000);
+  const [spotsLeft, setSpotsLeft] = useState(42);
 
   useEffect(() => {
     // Simular contadores ao vivo
     const interval = setInterval(() => {
-      setActiveUsers(prev => prev + Math.floor(Math.random() * 3));
-      setTotalSavings(prev => prev + Math.floor(Math.random() * 5000));
-      setSpotsLeft(prev => (prev > 0 ? prev - 1 : 156));
+      setActiveUsers(prev => prev + Math.floor(Math.random() * 2));
+      setTotalSavings(prev => prev + Math.floor(Math.random() * 180));
+      setSpotsLeft(prev => (prev > 18 ? prev - 1 : 42));
     }, 3000);
     return () => clearInterval(interval);
   }, []);
@@ -36,13 +36,13 @@ export default function Home() {
             </div>
             <div>
               <span className="font-bold text-lg">O ZAP TE CONTA</span>
-              <p className="text-xs text-green-300">⚡ 2.847 pessoas usando AGORA</p>
+              <p className="text-xs text-green-300">Planos a partir de R$ 4,99/mês</p>
             </div>
           </div>
           <div className="hidden md:flex gap-4 text-sm items-center">
-            <span className="bg-red-500 px-3 py-1 rounded-full text-xs font-bold">🔥 OFERTA LIMITADA</span>
+            <span className="bg-green-500 text-black px-3 py-1 rounded-full text-xs font-bold">PIX OU CARTÃO</span>
             <Button className="bg-green-500 hover:bg-green-600 text-black font-bold">
-              COMEÇAR AGORA
+              VER PLANOS
             </Button>
           </div>
         </div>
@@ -55,7 +55,7 @@ export default function Home() {
             <div className="space-y-6">
               <div className="space-y-3">
                 <div className="inline-block bg-green-500 text-black px-4 py-2 rounded-full font-bold text-sm">
-                  ⚡ SUCESSO NO SEU BOLSO, LIBERDADE NA SUA VIDA!
+                  PLANOS ACESSÍVEIS • PIX OU CARTÃO • 100% BRASILEIRO
                 </div>
                 <h1 className="text-5xl md:text-6xl font-bold leading-tight">
                   O ZAP TE CONTA
@@ -65,11 +65,11 @@ export default function Home() {
                 </p>
               </div>
 
-              <div className="space-y-4 bg-blue-800 p-6 rounded-lg border-2 border-green-500">
-                <p className="text-lg">✅ Receba alertas sobre seu dinheiro</p>
-                <p className="text-lg">✅ Controle seus ganhos e gastos</p>
-                <p className="text-lg">✅ Alcance suas metas mais rápido</p>
-                <p className="text-lg">✅ Segurança e privacidade total</p>
+              <div className="space-y-4 bg-blue-800/90 p-6 rounded-2xl border border-green-400 shadow-2xl">
+                <p className="text-lg">✅ Controle seus ganhos, gastos e metas pelo WhatsApp</p>
+                <p className="text-lg">✅ Plano Padrão por apenas R$ 4,99/mês</p>
+                <p className="text-lg">✅ Plano Completo com FIPE, mercado financeiro e criptomoedas</p>
+                <p className="text-lg">✅ Pagamento por cartão de crédito ou Pix</p>
               </div>
 
               <div className="flex flex-col sm:flex-row gap-4">
@@ -77,19 +77,19 @@ export default function Home() {
                   size="lg" 
                   className="bg-green-500 hover:bg-green-600 text-black font-bold h-14 px-8 rounded-lg text-lg"
                 >
-                  COMEÇAR AGORA <ArrowRight className="ml-2 w-5 h-5" />
+                  VER PLANOS <ArrowRight className="ml-2 w-5 h-5" />
                 </Button>
                 <Button 
                   variant="outline" 
                   size="lg"
                   className="border-2 border-white text-white hover:bg-blue-700 font-bold h-14 px-8 rounded-lg text-lg"
                 >
-                  VER DEMO
+                  CONHECER RECURSOS
                 </Button>
               </div>
 
               <p className="text-sm text-green-300 font-bold">
-                ✨ Sem cartão de crédito • Acesso imediato • 100% brasileiro
+                ✨ A partir de R$ 4,99/mês • Pix ou cartão • Acesso imediato
               </p>
             </div>
 
@@ -103,18 +103,18 @@ export default function Home() {
           </div>
 
           {/* Contadores ao Vivo */}
-          <div className="grid grid-cols-3 gap-4 mt-12 text-center">
-            <div className="bg-green-500 text-black p-4 rounded-lg font-bold">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-12 text-center">
+            <div className="bg-white/10 backdrop-blur text-white p-5 rounded-2xl border border-white/20">
               <p className="text-3xl">{activeUsers.toLocaleString()}</p>
-              <p className="text-sm">Pessoas usando AGORA</p>
+              <p className="text-sm text-green-200">Clientes ativos</p>
             </div>
-            <div className="bg-green-500 text-black p-4 rounded-lg font-bold">
-              <p className="text-3xl">R$ {(totalSavings / 1000000).toFixed(1)}M</p>
-              <p className="text-sm">Economizados</p>
+            <div className="bg-white/10 backdrop-blur text-white p-5 rounded-2xl border border-white/20">
+              <p className="text-3xl">R$ {totalSavings.toLocaleString('pt-BR')}</p>
+              <p className="text-sm text-green-200">Em gastos organizados</p>
             </div>
-            <div className="bg-red-500 text-white p-4 rounded-lg font-bold">
+            <div className="bg-green-500 text-black p-5 rounded-2xl font-bold shadow-xl">
               <p className="text-3xl">{spotsLeft}</p>
-              <p className="text-sm">Vagas restantes</p>
+              <p className="text-sm">Ativações promocionais</p>
             </div>
           </div>
         </div>
@@ -148,7 +148,7 @@ export default function Home() {
                 <li>✅ Dívidas pagas</li>
                 <li>✅ Paz de espírito</li>
                 <li>✅ Controle financeiro completo</li>
-                <li>✅ Economia de R$ 2.000+/mês</li>
+                <li>✅ Decisões financeiras mais claras</li>
               </ul>
             </div>
           </div>
@@ -159,29 +159,29 @@ export default function Home() {
       <section className="bg-gray-50 py-16 md:py-24">
         <div className="container mx-auto px-4">
           <h2 className="text-4xl md:text-5xl font-bold text-center mb-4">
-            Histórias de Sucesso 🏆
+            Clientes que já começaram 🏆
           </h2>
           <p className="text-center text-xl text-gray-600 mb-12">
-            Pessoas reais. Resultados reais.
+            Resultados possíveis quando o controle financeiro vira hábito.
           </p>
 
           <div className="grid md:grid-cols-3 gap-8 mb-8">
             <div className="bg-white p-8 rounded-lg border-2 border-green-500 text-center">
-              <div className="text-6xl font-bold text-green-500 mb-4">R$ 2.500</div>
+              <div className="text-6xl font-bold text-green-500 mb-4">R$ 380</div>
               <p className="text-xl font-bold mb-2">Carlos M. - Empresário</p>
-              <p className="text-gray-600">"Economizei em apenas 2 meses!"</p>
+              <p className="text-gray-600">"Passei a enxergar melhor meus gastos fixos."</p>
             </div>
 
             <div className="bg-white p-8 rounded-lg border-2 border-green-500 text-center">
-              <div className="text-6xl font-bold text-green-500 mb-4">Dívidas</div>
+              <div className="text-6xl font-bold text-green-500 mb-4">Metas</div>
               <p className="text-xl font-bold mb-2">Ana Silva - Consultora</p>
-              <p className="text-gray-600">"Paguei todas as minhas dívidas!"</p>
+              <p className="text-gray-600">"Agora acompanho minhas metas sem planilha."</p>
             </div>
 
             <div className="bg-white p-8 rounded-lg border-2 border-green-500 text-center">
-              <div className="text-6xl font-bold text-green-500 mb-4">R$ 10K</div>
+              <div className="text-6xl font-bold text-green-500 mb-4">FIPE</div>
               <p className="text-xl font-bold mb-2">Roberto F. - Investidor</p>
-              <p className="text-gray-600">"Consegui investir R$ 10 mil!"</p>
+              <p className="text-gray-600">"Uso o plano completo para consultar veículo e mercado."</p>
             </div>
           </div>
 
@@ -262,24 +262,100 @@ export default function Home() {
 
             <div className="bg-blue-800 p-8 rounded-lg border-2 border-green-500">
               <div className="flex items-start gap-4">
-                <div className="text-4xl">💡</div>
+                <div className="text-4xl">🚗</div>
                 <div>
-                  <h3 className="text-2xl font-bold mb-2">Dicas de Economia</h3>
-                  <p>Recomendações personalizadas para economizar mais</p>
+                  <h3 className="text-2xl font-bold mb-2">Tabela FIPE</h3>
+                  <p>Consulte valores de veículos direto pelo WhatsApp no Plano Completo</p>
                 </div>
               </div>
             </div>
 
             <div className="bg-blue-800 p-8 rounded-lg border-2 border-green-500">
               <div className="flex items-start gap-4">
-                <div className="text-4xl">🔒</div>
+                <div className="text-4xl">📈</div>
                 <div>
-                  <h3 className="text-2xl font-bold mb-2">100% Seguro</h3>
-                  <p>Criptografia de nível bancário protege seus dados</p>
+                  <h3 className="text-2xl font-bold mb-2">Mercado e Criptomoedas</h3>
+                  <p>Acompanhe informações financeiras, moedas e criptoativos no Plano Completo</p>
                 </div>
               </div>
             </div>
           </div>
+        </div>
+      </section>
+
+      {/* Planos */}
+      <section id="planos" className="bg-gray-50 py-16 md:py-24">
+        <div className="container mx-auto px-4">
+          <div className="text-center max-w-3xl mx-auto mb-12">
+            <div className="inline-flex items-center gap-2 bg-blue-900 text-white px-4 py-2 rounded-full font-bold text-sm mb-4">
+              <TrendingUp className="w-4 h-4 text-green-400" />
+              Escolha o plano ideal para você
+            </div>
+            <h2 className="text-4xl md:text-5xl font-bold mb-4">
+              Planos simples, preço baixo e acesso imediato
+            </h2>
+            <p className="text-xl text-gray-600">
+              Pague por Pix ou cartão de crédito. Sem complicação e com cancelamento quando quiser.
+            </p>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-8 max-w-5xl mx-auto">
+            <div className="bg-white rounded-3xl border-2 border-blue-100 p-8 shadow-lg">
+              <div className="mb-6">
+                <span className="bg-blue-100 text-blue-900 px-3 py-1 rounded-full text-sm font-bold">Plano Padrão</span>
+                <h3 className="text-3xl font-bold mt-4">Controle essencial</h3>
+                <p className="text-gray-600 mt-2">Para organizar o dinheiro do dia a dia sem pagar caro.</p>
+              </div>
+
+              <div className="mb-6">
+                <span className="text-5xl font-bold text-blue-900">R$ 4,99</span>
+                <span className="text-gray-600">/mês</span>
+              </div>
+
+              <ul className="space-y-3 text-gray-700 mb-8">
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Controle de ganhos e gastos pelo WhatsApp</li>
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Alertas e lembretes financeiros</li>
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Metas e acompanhamento básico</li>
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Sem busca de FIPE, mercado financeiro e criptomoedas</li>
+              </ul>
+
+              <Button size="lg" className="w-full bg-blue-900 hover:bg-blue-800 text-white font-bold">
+                Assinar Padrão por R$ 4,99
+              </Button>
+            </div>
+
+            <div className="relative bg-blue-900 text-white rounded-3xl border-2 border-green-500 p-8 shadow-2xl overflow-hidden">
+              <div className="absolute top-0 right-0 bg-green-500 text-black px-5 py-2 rounded-bl-2xl font-bold text-sm">
+                MAIS COMPLETO
+              </div>
+
+              <div className="mb-6">
+                <span className="bg-green-500 text-black px-3 py-1 rounded-full text-sm font-bold">Plano Completo</span>
+                <h3 className="text-3xl font-bold mt-4">Finanças + consultas inteligentes</h3>
+                <p className="text-blue-100 mt-2">Para quem quer controlar dinheiro e consultar dados externos em um só lugar.</p>
+              </div>
+
+              <div className="mb-6">
+                <span className="text-5xl font-bold text-green-400">R$ 9,99</span>
+                <span className="text-blue-100">/mês</span>
+              </div>
+
+              <ul className="space-y-3 text-blue-50 mb-8">
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-400 shrink-0" /> Tudo do Plano Padrão</li>
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-400 shrink-0" /> Consulta à Tabela FIPE</li>
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-400 shrink-0" /> Dados de mercado financeiro</li>
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-400 shrink-0" /> Informações sobre criptomoedas</li>
+              </ul>
+
+              <Button size="lg" className="w-full bg-green-500 hover:bg-green-600 text-black font-bold">
+                Assinar Completo por R$ 9,99
+              </Button>
+            </div>
+          </div>
+
+          <p className="text-center text-gray-500 mt-8">
+            Pagamento via cartão de crédito ou Pix. Ativação liberada após confirmação.
+          </p>
         </div>
       </section>
 
@@ -348,14 +424,21 @@ export default function Home() {
               <summary className="font-bold text-lg text-blue-900">
                 💳 Preciso de cartão de crédito?
               </summary>
-              <p className="mt-4 text-gray-600">Não! O Zap Te Conta é 100% gratuito. Sem cartão de crédito, sem cobranças ocultas.</p>
+              <p className="mt-4 text-gray-600">Não. Você pode pagar por Pix ou cartão de crédito. O Plano Padrão custa R$ 4,99/mês e o Plano Completo custa R$ 9,99/mês.</p>
+            </details>
+
+            <details className="bg-white p-6 rounded-lg border-2 border-blue-900 cursor-pointer">
+              <summary className="font-bold text-lg text-blue-900">
+                📊 Qual a diferença entre os planos?
+              </summary>
+              <p className="mt-4 text-gray-600">O Padrão foca no controle financeiro pelo WhatsApp. O Completo adiciona consultas à Tabela FIPE, dados de mercado financeiro e informações sobre criptomoedas.</p>
             </details>
 
             <details className="bg-white p-6 rounded-lg border-2 border-blue-900 cursor-pointer">
               <summary className="font-bold text-lg text-blue-900">
                 ⏱️ Quanto tempo leva para começar?
               </summary>
-              <p className="mt-4 text-gray-600">Apenas 3 minutos! Você se cadastra, conecta sua conta e já começa a receber alertas.</p>
+              <p className="mt-4 text-gray-600">A ativação é rápida após a confirmação do pagamento. Depois disso, você já pode começar a usar pelo WhatsApp.</p>
             </details>
 
             <details className="bg-white p-6 rounded-lg border-2 border-blue-900 cursor-pointer">
@@ -379,10 +462,10 @@ export default function Home() {
       <section className="bg-green-500 text-black py-12 md:py-16">
         <div className="container mx-auto px-4 text-center">
           <h2 className="text-3xl md:text-4xl font-bold mb-4">
-            ✅ Garantia 30 Dias ou Dinheiro de Volta
+            ✅ Comece com um plano acessível
           </h2>
           <p className="text-lg">
-            Não gostou? Devolvemos 100% do seu dinheiro. Sem perguntas, sem complicações.
+            Escolha entre R$ 4,99/mês no Padrão ou R$ 9,99/mês no Completo, com pagamento por Pix ou cartão.
           </p>
         </div>
       </section>
@@ -390,16 +473,16 @@ export default function Home() {
       {/* CTA Final com Urgência */}
       <section className="bg-blue-900 text-white py-20 md:py-32">
         <div className="container mx-auto px-4 text-center">
-          <div className="inline-block bg-red-500 text-white px-4 py-2 rounded-full font-bold mb-6">
-            ⏰ OFERTA VÁLIDA POR 48 HORAS
+          <div className="inline-block bg-green-500 text-black px-4 py-2 rounded-full font-bold mb-6">
+            PLANOS DISPONÍVEIS PARA ATIVAÇÃO
           </div>
 
           <h2 className="text-4xl md:text-5xl font-bold mb-6">
-            Comece Sua Transformação Financeira AGORA
+            Comece sua organização financeira agora
           </h2>
 
           <p className="text-xl text-green-300 mb-8 max-w-2xl mx-auto">
-            Junte-se a 2.847 pessoas que estão mudando suas vidas financeiras neste exato momento.
+            Escolha seu plano e tenha controle financeiro direto no WhatsApp.
           </p>
 
           <div className="flex flex-col sm:flex-row gap-4 justify-center mb-8">
@@ -414,26 +497,26 @@ export default function Home() {
               size="lg"
               className="bg-green-500 hover:bg-green-600 text-black font-bold h-14 px-8 rounded-lg text-lg"
             >
-              COMEÇAR AGORA <ArrowRight className="ml-2 w-5 h-5" />
+              QUERO ESCOLHER MEU PLANO <ArrowRight className="ml-2 w-5 h-5" />
             </Button>
           </div>
 
           <p className="text-sm text-green-300 font-bold">
-            ✨ Sem cartão de crédito • Acesso imediato • Ganhe R$ 100 em créditos
+            ✨ Plano Padrão R$ 4,99 • Completo R$ 9,99 • Pix ou cartão
           </p>
 
           <div className="mt-12 grid md:grid-cols-3 gap-6 text-center">
             <div>
               <p className="text-4xl font-bold text-green-500">{activeUsers.toLocaleString()}</p>
-              <p className="text-sm">Pessoas usando AGORA</p>
+              <p className="text-sm">Clientes ativos</p>
             </div>
             <div>
-              <p className="text-4xl font-bold text-green-500">R$ {(totalSavings / 1000000).toFixed(1)}M</p>
-              <p className="text-sm">Economizados este mês</p>
+              <p className="text-4xl font-bold text-green-500">R$ {totalSavings.toLocaleString('pt-BR')}</p>
+              <p className="text-sm">Em gastos organizados</p>
             </div>
             <div>
               <p className="text-4xl font-bold text-red-500">{spotsLeft}</p>
-              <p className="text-sm">Vagas restantes</p>
+              <p className="text-sm">Ativações promocionais</p>
             </div>
           </div>
         </div>
