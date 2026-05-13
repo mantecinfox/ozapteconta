@@ -51,7 +51,7 @@ export default function Home() {
       {/* Hero Section com Gatilhos */}
       <section className="relative overflow-hidden bg-gradient-to-b from-blue-900 to-blue-800 text-white py-16 md:py-24">
         <div className="container mx-auto px-4">
-          <div className="grid md:grid-cols-2 gap-12 items-center">
+          <div className="grid lg:grid-cols-[0.9fr_1.1fr] gap-12 items-center">
             <div className="space-y-6">
               <div className="space-y-3">
                 <div className="inline-block bg-green-500 text-black px-4 py-2 rounded-full font-bold text-sm">
@@ -93,12 +93,33 @@ export default function Home() {
               </p>
             </div>
 
-            <div className="relative h-96 md:h-full flex items-center justify-center">
-              <img 
-                src="https://d2xsxph8kpxj0f.cloudfront.net/310419663028484296/azDT7U6LLduZEjhZgggaQx/hero-zap-te-conta-PrnpHjUY8RJnzx3WugEQsz.webp"
-                alt="O Zap Te Conta"
-                className="w-full h-full object-cover rounded-lg shadow-2xl"
-              />
+            <div className="relative">
+              <div className="absolute -inset-3 rounded-[2rem] bg-gradient-to-br from-green-400/40 via-blue-500/20 to-transparent blur-2xl" />
+              <div className="relative overflow-hidden rounded-[2rem] border border-white/15 bg-blue-950/50 p-3 shadow-2xl">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-2 text-xs font-bold text-green-200">
+                  <span className="rounded-full bg-white/10 px-3 py-1">WhatsApp financeiro</span>
+                  <span className="rounded-full bg-green-500 px-3 py-1 text-black">APP 100% brasileiro</span>
+                </div>
+                <img
+                  src="https://d2xsxph8kpxj0f.cloudfront.net/310419663028484296/azDT7U6LLduZEjhZgggaQx/hero-zap-te-conta-PrnpHjUY8RJnzx3WugEQsz.webp"
+                  alt="O Zap Te Conta no WhatsApp"
+                  className="h-auto w-full rounded-2xl object-contain"
+                />
+                <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs font-bold">
+                  <div className="rounded-xl bg-white/10 p-3">
+                    <p className="text-green-300">R$ 4,99</p>
+                    <p className="text-white/70">Padrão</p>
+                  </div>
+                  <div className="rounded-xl bg-green-500 p-3 text-black">
+                    <p>R$ 9,99</p>
+                    <p className="text-black/70">Completo</p>
+                  </div>
+                  <div className="rounded-xl bg-white/10 p-3">
+                    <p className="text-green-300">Pix/cartão</p>
+                    <p className="text-white/70">Ativação</p>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
