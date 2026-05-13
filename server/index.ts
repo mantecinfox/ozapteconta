@@ -12,11 +12,8 @@ async function startServer() {
 
   app.set("trust proxy", 1);
 
-  // Build output: dist/index.js alongside dist/public (Vite outDir)
-  const staticPath =
-    process.env.NODE_ENV === "production"
-      ? path.resolve(__dirname, "public")
-      : path.resolve(__dirname, "..", "dist", "public");
+  // Vite emits static assets to /build; the bundled server lives in /dist.
+  const staticPath = path.resolve(__dirname, "..", "build");
 
   app.use(express.static(staticPath));
 
