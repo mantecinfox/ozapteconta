@@ -1,0 +1,22 @@
+{
+  "name": "financebot-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -k -n BACKEND,FRONTEND -c green,cyan \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\"",
+    "build": "npm run hostinger:build",
+    "start": "npm start --prefix backend",
+    "setup": "npm run setup:env && npm run setup:install && npm run setup:db",
+    "setup:env": "node scripts/setup-env.cjs",
+    "setup:install": "npm install --prefix backend --legacy-peer-deps && npm install --prefix frontend --legacy-peer-deps",
+    "setup:db": "node scripts/setup-db.cjs",
+    "hostinger:install": "npm ci --prefix backend --legacy-peer-deps && npm ci --prefix frontend --legacy-peer-deps",
+    "hostinger:build": "node scripts/hostinger-build.cjs",
+    "hostinger:db:push": "node scripts/hostinger-db-push.cjs",
+    "hostinger:validate-deploy": "node scripts/validate-hostinger-deploy.cjs",
+    "hostinger:validate-env": "node scripts/validate-hostinger-env.cjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

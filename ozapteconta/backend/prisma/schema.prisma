@@ -1,0 +1,561 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Admin users (dashboard access) ──────────────────────────────────────────
+model AdminUser {
+  id           String    @id @default(uuid())
+  username     String    @unique
+  passwordHash String
+  name         String?
+  role         AdminRole @default(OPERATOR)
+  active       Boolean   @default(true)
+  lastLogin    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@map("admin_users")
+}
+
+model AdminAuditLog {
+  id            Int      @id @default(autoincrement())
+  adminUserId   String?
+  adminUsername String?
+  adminRole     String?
+  method        String
+  path          String
+  action        String
+  entityType    String?
+  entityId      String?
+  statusCode    Int
+  success       Boolean  @default(true)
+  ipAddress     String?
+  userAgent     String?
+  requestBody   Json?
+  queryParams   Json?
+  details       Json?
+  createdAt     DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([adminUsername, createdAt])
+  @@index([action, createdAt])
+  @@index([entityType, createdAt])
+  @@map("admin_audit_logs")
+}
+
+enum AdminRole {
+  ADMIN
+  OPERATOR
+  AUDITOR
+}
+
+// ─── WhatsApp users (identified by phone) ────────────────────────────────────
+model WhatsappUser {
+  id                  Int      @id @default(autoincrement())
+  phone               String   @unique
+  name                String?
+  conversationContext Json?    // last N messages for context
+  isActive            Boolean  @default(true)
+  totalTransactions   Int      @default(0)
+  // Onboarding registration flow
+  registrationStep    String?  // null | "name" | "cpf" | "email" | "addr_street" | "addr_complement" | "addr_neighborhood" | "addr_city_state" | "addr_zip" | "plan" | "pending"
+  registrationData    Json?    // partial data collected during registration
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  transactions FinancialTransaction[]
+  audioMessages AudioMessage[]
+
+  @@map("whatsapp_users")
+}
+
+// ─── Financial transactions ───────────────────────────────────────────────────
+model FinancialTransaction {
+  id                  Int          @id @default(autoincrement())
+  userPhone           String
+  tipo                String       // "Conta de Luz", "Aluguel", "Salário"
+  valor               Decimal      @db.Decimal(12, 2)
+  natureza            Natureza
+  context             AccountContext @default(PESSOAL) // PESSOAL ou COMERCIAL
+  categoryId          Int?
+  categoria           String       @default("outros")
+  vencimento          DateTime?
+  status              StatusTrans  @default(PENDENTE)
+  fonte               Fonte        @default(TEXTO)
+  rawMessage          String?      @db.Text
+  audioStorageKey     String?
+  audioTranscription  String?      @db.Text
+  extractedConfidence Decimal?     @db.Decimal(3, 2)
+  needsHumanReview    Boolean      @default(false)
+  paidAt              DateTime?
+  notes               String?      @db.Text
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  user         WhatsappUser              @relation(fields: [userPhone], references: [phone])
+  category     ExpenseCategory?          @relation(fields: [categoryId], references: [id])
+  audioMessages AudioMessage[]
+  reminders     ReminderJob[]
+
+  @@index([userPhone])
+  @@index([status, vencimento])
+  @@index([natureza, status])
+  @@index([context, natureza])
+  @@index([categoryId])
+  @@map("financial_transactions")
+}
+
+enum Natureza {
+  PAGAR
+  RECEBER
+}
+
+enum StatusTrans {
+  PENDENTE
+  PAGO
+  VENCIDO
+  CANCELADO
+}
+
+enum Fonte {
+  TEXTO
+  VOZ
+}
+
+enum AccountContext {
+  PESSOAL  // Casa / Pessoa Física
+  COMERCIAL // Escritório / Empresa
+}
+
+// ─── Audio messages ───────────────────────────────────────────────────────────
+model AudioMessage {
+  id               Int      @id @default(autoincrement())
+  transactionId    Int?
+  userPhone        String
+  storageKey       String
+  storageUrl       String?
+  transcription    String?  @db.Text
+  durationSeconds  Int?
+  mimeType         String   @default("audio/ogg")
+  whatsappMediaId  String?
+  reviewed         Boolean  @default(false)
+  reviewedAt       DateTime?
+  reviewedBy       String?
+  createdAt        DateTime @default(now())
+
+  user        WhatsappUser          @relation(fields: [userPhone], references: [phone])
+  transaction FinancialTransaction? @relation(fields: [transactionId], references: [id])
+
+  @@index([userPhone])
+  @@map("audio_messages")
+}
+
+// ─── AI provider configuration ────────────────────────────────────────────────
+model AiProviderConfig {
+  id          Int          @id @default(autoincrement())
+  provider    AiProvider   @unique
+  displayName String
+  apiKey      String?      @db.Text
+  apiUrl      String?
+  model       String?
+  enabled     Boolean      @default(false)
+  isDefault   Boolean      @default(false)
+  extraConfig Json?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@map("ai_provider_config")
+}
+
+enum AiProvider {
+  BUILTIN
+  OPENAI
+  GEMINI
+  GROQ
+  GROK
+  OLLAMA
+  ABACUS
+}
+
+// ─── WhatsApp configuration ───────────────────────────────────────────────────
+model WhatsappConfig {
+  id                Int      @id @default(autoincrement())
+  accessToken       String?  @db.Text
+  phoneNumberId     String?
+  verifyToken       String?
+  webhookSecret     String?
+  businessAccountId String?
+  enabled           Boolean  @default(false)
+  updatedAt         DateTime @updatedAt
+
+  @@map("whatsapp_config")
+}
+
+// ─── Reminder jobs ────────────────────────────────────────────────────────────
+model ReminderJob {
+  id            Int          @id @default(autoincrement())
+  transactionId Int
+  userPhone     String
+  reminderType  ReminderType
+  scheduledFor  DateTime
+  sentAt        DateTime?
+  status        ReminderStatus @default(PENDING)
+  createdAt     DateTime     @default(now())
+
+  transaction FinancialTransaction @relation(fields: [transactionId], references: [id])
+
+  @@index([scheduledFor, status])
+  @@map("reminder_jobs")
+}
+
+enum ReminderType {
+  THREE_DAYS_BEFORE
+  ON_DUE_DATE
+}
+
+enum ReminderStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED
+}
+
+// ─── System settings ──────────────────────────────────────────────────────────
+model SystemSetting {
+  key       String   @id
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt
+
+  @@map("system_settings")
+}
+
+// ─── Client portal (cadastro completo + ativação por QR) ───────────────────
+model ClientProfile {
+  id                   Int          @id @default(autoincrement())
+  clientType           String       @default("PF") // "PF" ou "PJ"
+  fullName             String
+  phone                String       @unique
+  portalUsername       String?      @unique
+  portalPasswordHash   String?
+  portalAccessEnabled  Boolean      @default(false)
+  portalLastLogin      DateTime?
+  email                String?      @unique
+  cpf                  String?      @unique  // Pessoa Física
+  cnpj                 String?      @unique  // Pessoa Jurídica
+  addressStreet        String
+  addressNumber        String
+  addressComplement    String?
+  addressNeighborhood  String
+  addressCity          String
+  addressState         String
+  addressZipCode       String
+  plan                 ClientPlan
+  status               ClientStatus @default(PENDING_ACTIVATION)
+  primaryContext       AccountContext @default(PESSOAL) // Contexto padrão (PESSOAL ou COMERCIAL)
+  qrToken              String       @unique @default(uuid())
+  assignedWhatsappAccountId Int?
+  activatedAt          DateTime?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  assignedWhatsappAccount GeneratedWhatsappAccount? @relation(fields: [assignedWhatsappAccountId], references: [id])
+  subscription ClientSubscription?
+
+  @@index([status, plan])
+  @@index([assignedWhatsappAccountId])
+  @@map("client_profiles")
+}
+
+enum ClientPlan {
+  HOME     // R$ 15,99/mês - Contas PESSOAL
+  OFFICE   // R$ 19,90/mês - Contas COMERCIAL
+  FULL     // R$ 29,90/mês - PESSOAL + COMERCIAL
+}
+
+enum ClientStatus {
+  PENDING_ACTIVATION
+  ACTIVE
+  INACTIVE
+}
+
+// ─── Official WhatsApp Business API ─────────────────────────────────────────
+model OfficialWhatsappAccount {
+  id                          Int      @id @default(autoincrement())
+  label                       String   // Ex: "Principal", "Secundária"
+  businessAccountId           String   @unique
+  phoneNumberId               String   @unique // ID do número na API
+  phone                       String   @unique // Formato: +5511999999999
+  accessToken                 String   @db.Text // Bearer token da API
+  permanentAccessToken        String?  @db.Text // Token permanente (preferível)
+  webhookVerifyToken          String   // Token para validar webhooks
+  webhookSecret               String?  @db.Text // Secret para assinar webhooks
+  isActive                    Boolean  @default(true)
+  whatsappConnectionStatus    String   @default("UNKNOWN") // CONNECTED, DISCONNECTED, ERROR, UNKNOWN
+  lastHealthCheck             DateTime?
+  lastHealthCheckError        String?
+  maxClientsSupported         Int      @default(1000)
+  currentClientCount          Int      @default(0)
+  notes                       String?
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  clientsFromQR GeneratedWhatsappAccount[] @relation("linkedToOfficial")
+
+  @@index([isActive])
+  @@index([whatsappConnectionStatus])
+  @@map("official_whatsapp_accounts")
+}
+
+// ─── Generated WhatsApp Accounts (via QR Code) ───────────────────────────────
+model GeneratedWhatsappAccount {
+  id                          Int      @id @default(autoincrement())
+  label                       String   // Ex: "Cliente 001", "Empresa XYZ"
+  phone                       String?  @unique // Preenchido automaticamente após pareamento
+  referenceCode               String   @unique
+  linkedToOfficialId          Int?     // Pode estar vinculado a uma conta oficial para escalabilidade
+  connectionType              String   @default("LOCAL") // LOCAL ou REMOTE
+  isActive                    Boolean  @default(true)
+  whatsappConnectionStatus    String   @default("UNKNOWN") // CONNECTED, DISCONNECTED, ERROR, UNKNOWN
+  qrCodeData                  String?  @db.Text // Dados do QR Code (base64)
+  qrCodeExpiresAt             DateTime?
+  sessionData                 Json? // Dados de sessão do Baileys
+  lastHealthCheck             DateTime?
+  lastHealthCheckError        String?
+  maxClients                  Int      @default(500)
+  currentClientCount          Int      @default(0)
+  notes                       String?
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  linkedToOfficial OfficialWhatsappAccount? @relation("linkedToOfficial", fields: [linkedToOfficialId], references: [id])
+  clients ClientProfile[]
+
+  @@index([isActive])
+  @@index([whatsappConnectionStatus])
+  @@index([linkedToOfficialId])
+  @@map("generated_whatsapp_accounts")
+}
+
+// ─── Expense categories (categorização de despesas por contexto) ───────────
+model ExpenseCategory {
+  id            Int            @id @default(autoincrement())
+  context       AccountContext // PESSOAL ou COMERCIAL
+  name          String         // "Alimentação", "Salários", "Aluguel", etc
+  description   String?
+  icon          String?        // emoji ou nome do ícone
+  color         String?        // cor para UI
+  isDefault     Boolean        @default(false)
+  isActive      Boolean        @default(true)
+  displayOrder  Int            @default(999)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  transactions FinancialTransaction[]
+
+  @@unique([context, name])
+  @@index([context, isActive])
+  @@map("expense_categories")
+}
+
+// ─── Subscription plans (definição de preços e features) ─────────────────────
+model SubscriptionPlan {
+  id                Int      @id @default(autoincrement())
+  plan              ClientPlan @unique
+  displayName       String   // "Home", "Office", "Full"
+  description       String   @db.Text
+  priceMonthly      Decimal  @db.Decimal(10, 2) // R$ 15,99, R$ 19,90, R$ 29,90
+  allowedContexts   String   @db.Text // JSON: ["PESSOAL"] ou ["COMERCIAL"] ou ["PESSOAL", "COMERCIAL"]
+  maxCategories     Int      @default(50)
+  maxTransactions   Int      @default(5000) // por mês
+  maxUsers          Int      @default(1)
+  hasReporting      Boolean  @default(true)
+  hasReminders      Boolean  @default(true)
+  hasAudioMessages  Boolean  @default(true)
+  hasAIExtraction   Boolean  @default(true)
+  supportLevel      String   @default("email") // email, priority, phone
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("subscription_plans")
+}
+
+// ─── Treinamento do bot (base de conhecimento) ──────────────────────────────
+model BotKnowledgeEntry {
+  id        Int      @id @default(autoincrement())
+  title     String
+  keywords  String   @db.Text
+  content   String   @db.Text
+  enabled   Boolean  @default(true)
+  priority  Int      @default(100)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([enabled, priority])
+  @@map("bot_knowledge_entries")
+}
+
+// ─── Payment Gateway Configurations ─────────────────────────────────────────
+model PaymentGatewayConfig {
+  id              Int     @id @default(autoincrement())
+  provider        String  @unique // "infinitypay", "mercadopago"
+  displayName     String  // "InfinityPay", "Mercado Pago"
+  description     String?
+  isEnabled       Boolean @default(true)
+  isPrimary       Boolean @default(false) // Gateway padrão para novos clientes
+  
+  // InfinityPay specific
+  infinityPayMerchantKey String? @db.Text // Ex: $mantecinfoxsystem
+  infinityPayApiKey      String? @db.Text
+  infinityPayWebhookSecret String? @db.Text
+  
+  // Mercado Pago specific
+  mercadoPagoAccessToken String? @db.Text
+  mercadoPagoPublicKey   String? @db.Text
+  mercadoPagoWebhookSecret String? @db.Text
+  
+  // General config
+  environment     String  @default("sandbox") // sandbox ou production
+  webhookUrl      String? // URL para receber webhooks
+  timeoutSeconds  Int     @default(30)
+  maxRetries      Int     @default(3)
+  
+  // Additional configs
+  extraConfig     Json? // Qualquer configuração adicional específica do provider
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([provider, isEnabled])
+  @@map("payment_gateway_configs")
+}
+
+// ─── Payment Gateway Credentials (histórico de senhas/tokens) ───────────────
+model PaymentGatewayCredential {
+  id              Int     @id @default(autoincrement())
+  provider        String  // "infinitypay", "mercadopago"
+  credentialType  String  // "api_key", "merchant_key", "webhook_secret", etc
+  encryptedValue  String  @db.Text // Valor criptografado
+  expiresAt       DateTime?
+  isActive        Boolean @default(true)
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([provider, credentialType, isActive])
+  @@map("payment_gateway_credentials")
+}
+
+// ─── Payment Gateway Logs (auditoria de requisições/erros) ──────────────────
+model PaymentGatewayLog {
+  id              Int     @id @default(autoincrement())
+  provider        String  // "infinitypay", "mercadopago"
+  action          String  // "charge_created", "charge_failed", "webhook_received", "health_check", etc
+  requestData     Json?   // Dados enviados
+  responseStatus  Int?    // HTTP status
+  responseData    Json?   // Resposta
+  errorMessage    String? @db.Text
+  duration        Int? // Tempo em ms
+  createdAt       DateTime @default(now())
+
+  @@index([provider, action, createdAt])
+  @@map("payment_gateway_logs")
+}
+
+enum SubscriptionStatus {
+  PENDING       // Aguardando primeiro pagamento
+  ACTIVE        // Ativa e em dia
+  PAST_DUE      // Atrasada
+  CANCELED      // Cancelada
+  SUSPENDED     // Suspensa por falta de pagamento
+}
+
+enum PaymentStatus {
+  PENDING       // Pendente de processamento
+  PROCESSING    // Sendo processada
+  APPROVED      // Aprovada
+  DECLINED      // Recusada
+  FAILED        // Falha na transação
+  REFUNDED      // Reembolsada
+  EXPIRED       // Expirada
+}
+
+enum PaymentMethod {
+  CREDIT_CARD
+  DEBIT_CARD
+  PIX
+  BOLETO
+  BANK_TRANSFER
+}
+
+// ─── Assinaturas de clientes ────────────────────────────────────────────────
+model ClientSubscription {
+  id                      Int                 @id @default(autoincrement())
+  clientId                Int
+  plan                    ClientPlan
+  status                  SubscriptionStatus  @default(PENDING)
+  infinityPayCustomerId   String?             // ID do cliente na InfinityPay
+  infinityPaySubscriptionId String?           // ID da subscrição na InfinityPay
+  priceMonthly            Decimal             @db.Decimal(10, 2)
+  billingCycleDayOfMonth  Int                 @default(1) // Dia de cobrança
+  nextBillingDate         DateTime?
+  lastBillingDate         DateTime?
+  cancellationDate        DateTime?
+  cancellationReason      String?
+  autoRenew               Boolean             @default(true)
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
+
+  client   ClientProfile @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  payments Payment[]
+
+  @@unique([clientId]) // Um cliente só pode ter uma subscrição ativa
+  @@index([status])
+  @@index([nextBillingDate])
+  @@map("client_subscriptions")
+}
+
+// ─── Histórico de pagamentos ────────────────────────────────────────────────
+model Payment {
+  id                      Int            @id @default(autoincrement())
+  subscriptionId          Int
+  infinityPayTransactionId String?       // ID da transação na InfinityPay
+  amount                  Decimal        @db.Decimal(10, 2)
+  currency                String         @default("BRL")
+  status                  PaymentStatus  @default(PENDING)
+  paymentMethod           PaymentMethod?
+  description             String?
+  failureReason           String?
+  attemptNumber           Int            @default(1)
+  maxRetries              Int            @default(3)
+  nextRetryDate           DateTime?
+  chargedAt               DateTime?      // Data da cobrança
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
+
+  subscription ClientSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  logs         PaymentLog[]
+
+  @@index([status])
+  @@index([chargedAt])
+  @@index([subscriptionId])
+  @@map("payments")
+}
+
+// ─── Log detalhado de pagamentos (para auditoria) ────────────────────────────
+model PaymentLog {
+  id        Int      @id @default(autoincrement())
+  paymentId Int
+  action    String   // "initiated", "retry", "approved", "declined", "refunded"
+  details   Json?    // Resposta da API
+  createdAt DateTime @default(now())
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId, createdAt])
+  @@map("payment_logs")
+}

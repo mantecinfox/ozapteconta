@@ -1,0 +1,877 @@
+import fs from "fs";
+import path from "path";
+import { prisma } from "../config/prisma";
+import { logger } from "../utils/logger";
+import { writeAiUsageLog } from "./aiUsageMetricsService";
+
+export interface AIMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+export interface ExtractedTransaction {
+  tipo: string;
+  valor: number | null;
+  natureza: "PAGAR" | "RECEBER";
+  contexto: "PESSOAL" | "COMERCIAL";
+  categoria: string;
+  categoryId: number | null;
+  vencimento: string | null; // YYYY-MM-DD
+  confidence: number;
+  needsMoreInfo: boolean;
+  missingFields: string[];
+  responseMessage: string;
+  transcription?: string | null;
+}
+
+const DEFAULT_ABACUS_AUDIO_MODELS = [
+  "gpt-4o-audio-preview",
+  "gpt-4o-mini-audio-preview",
+];
+
+const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
+  OPENAI: "gpt-4o-mini",
+  BUILTIN: "gpt-4o-mini",
+  GEMINI: "gemini-2.5-flash",
+  GROQ: "llama-3.1-8b-instant",
+  GROK: "grok-2-latest",
+  ABACUS: "gpt-4o-mini",
+  OLLAMA: "hermes3:8b",
+};
+
+function defaultModelForProvider(provider: string): string {
+  return DEFAULT_PROVIDER_MODELS[provider] || "gpt-4o-mini";
+}
+
+function normalizeModelForProvider(provider: string, model: string | null | undefined): string {
+  const selected = String(model || "").trim();
+  if (!selected) return defaultModelForProvider(provider);
+
+  const obsolete: Record<string, Record<string, string>> = {
+    GEMINI: {
+      "gemini-1.5-flash": "gemini-2.5-flash",
+      "gemini-1.5-pro": "gemini-2.5-pro",
+    },
+    GROQ: {
+      "llama3-8b-8192": "llama-3.1-8b-instant",
+      "llama3-70b-8192": "llama-3.3-70b-versatile",
+      "mixtral-8x7b-32768": "llama-3.1-8b-instant",
+    },
+    GROK: {
+      "grok-beta": "grok-2-latest",
+    },
+    ABACUS: {
+      "gpt-5": "gpt-4o-mini",
+      "gpt-4o-audio-preview": "gpt-4o-mini",
+      "gpt-4o-mini-audio-preview": "gpt-4o-mini",
+      "gemini-2.5-pro": "gpt-4o-mini",
+    },
+  };
+
+  return obsolete[provider]?.[selected] || selected;
+}
+
+async function ensureOllamaModelAvailable(baseUrl: string, model: string): Promise<void> {
+  const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/api/tags`, {
+    signal: AbortSignal.timeout(8000),
+  });
+
+  if (!response.ok) {
+    throw new Error(`OLLAMA indisponível em ${baseUrl}. Verifique se o serviço está ativo.`);
+  }
+
+  const data = (await response.json()) as {
+    models?: Array<{ name?: string; model?: string }>;
+  };
+  const available = (data.models || [])
+    .map((item) => item.name || item.model)
+    .filter(Boolean) as string[];
+
+  if (available.length === 0) {
+    throw new Error(
+      `OLLAMA não possui modelos instalados. Instale um modelo no servidor, por exemplo: ollama pull ${model}`,
+    );
+  }
+
+  if (!available.includes(model)) {
+    throw new Error(
+      `Modelo OLLAMA "${model}" não instalado. Modelos disponíveis: ${available.join(", ")}`,
+    );
+  }
+}
+
+function normalizeAudioModelChain(raw: string | null | undefined): string[] {
+  const parsed = String(raw || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  const valid = Array.from(new Set(parsed)).filter((model) => DEFAULT_ABACUS_AUDIO_MODELS.includes(model));
+  return valid.length > 0 ? valid : DEFAULT_ABACUS_AUDIO_MODELS;
+}
+
+function detectAudioFormatFromPath(audioPath: string): "ogg" | "mp3" | "wav" | "mp4" {
+  const ext = path.extname(audioPath).toLowerCase();
+  if (ext === ".mp3") return "mp3";
+  if (ext === ".wav") return "wav";
+  if (ext === ".mp4" || ext === ".m4a") return "mp4";
+  return "ogg";
+}
+
+function extractResponseContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+
+  return content
+    .map((part) => {
+      const data = part as Record<string, unknown>;
+      if (typeof data.text === "string") return data.text;
+      if (typeof data.content === "string") return data.content;
+      if (typeof data.transcript === "string") return data.transcript;
+      return "";
+    })
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+}
+
+// ─── System prompt para extração de transações ────────────────────────────────
+function buildExtractionPrompt(
+  allowedContexts: ("PESSOAL" | "COMERCIAL")[],
+  categories: Array<{ context: string; name: string; description: string | null }>
+): string {
+  const now = new Date();
+  const today = now.toISOString().split("T")[0];
+  const tomorrow = new Date(now.getTime() + 86400000).toISOString().split("T")[0];
+  const dayOfWeek = now.toLocaleDateString("pt-BR", { weekday: "long" });
+
+  const onlyPessoal = allowedContexts.length === 1 && allowedContexts[0] === "PESSOAL";
+  const onlyComercial = allowedContexts.length === 1 && allowedContexts[0] === "COMERCIAL";
+
+  const contextRule = onlyPessoal
+    ? 'CONTEXTO: Sempre "PESSOAL" (plano pessoal).'
+    : onlyComercial
+    ? 'CONTEXTO: Sempre "COMERCIAL" (plano empresarial).'
+    : 'CONTEXTO: "PESSOAL" para despesas do dia a dia/casa, "COMERCIAL" para despesas empresariais.';
+
+  const catLines = categories
+    .filter((c) => allowedContexts.includes(c.context as "PESSOAL" | "COMERCIAL"))
+    .map((c) => `  [${c.context}] "${c.name}" → ${c.description || ""}`)
+    .join("\n");
+
+  return `Você é um assistente financeiro pessoal via WhatsApp. Extraia informações financeiras de mensagens em português brasileiro e retorne APENAS um JSON válido.
+
+CAMPOS A EXTRAIR:
+- "tipo": nome específico da conta/item (ex: "Conta de Luz", "Feijão e Arroz", "Gasolina", "Telefone Celular")
+- "valor": número decimal em reais. null se não informado
+- "natureza": "PAGAR" para despesas/saídas, "RECEBER" para receitas/entradas
+- "contexto": "PESSOAL" ou "COMERCIAL"
+- "categoria": nome EXATO de uma das categorias abaixo
+- "vencimento": data ISO YYYY-MM-DD. null se não informado. "hoje"=${today}, "amanhã"=${tomorrow}
+- "confidence": 0.0 a 1.0
+- "needsMoreInfo": true se faltar tipo ou valor
+- "missingFields": lista de campos faltantes
+- "responseMessage": mensagem amigável em português com emojis para enviar ao usuário
+
+${contextRule}
+
+CATEGORIAS DISPONÍVEIS (use o nome EXATO entre aspas):
+${catLines}
+
+REGRAS DE CATEGORIZAÇÃO:
+• arroz, feijão, carne, leite, frango, ovo, farinha, café, peixe, legume, fruta, verdura, mercado, supermercado, feira → "Alimentação e Mercado" [PESSOAL]
+• restaurante, lanchonete, McDonald's, Burger King, pizza, delivery, iFood, UberEats, marmita, sushi, hamburguer, lanche na rua, fast-food, cafeteria, sorveteria → "Refeições Fora / Delivery" [PESSOAL]
+• aluguel (casa/apto), financiamento imóvel, IPTU, prestação do apê → "Moradia" [PESSOAL]
+• condomínio, taxa condominial → "Condomínio" [PESSOAL]
+• luz, energia, conta de luz, CPFL, Enel, Cemig, Elektro → "Energia Elétrica" [PESSOAL]
+• água, esgoto, SABESP, SANEPAR, conta de água → "Água e Saneamento" [PESSOAL]
+• gás, botijão, GLP, gás de cozinha → "Gás" [PESSOAL]
+• internet, banda larga, fibra, telefone celular, plano móvel, recarga de celular, Tim, Vivo, Claro, Oi → "Internet e Telefone" [PESSOAL]
+• netflix, spotify, amazon prime, disney+, hbo, globoplay, apple tv, youtube premium, tv a cabo, academia → "Assinaturas e Streaming" [PESSOAL]
+• detergente, sabão, amaciante, vassoura, rodo, esponja, faxineira, diarista, dedetização → "Limpeza e Conservação" [PESSOAL]
+• roupa, calça, camisa, vestido, tênis, sapato, sandália, meia, cueca, sutiã, moda, brechó → "Vestuário e Calçados" [PESSOAL]
+• shampoo, sabonete, pasta de dente, desodorante, perfume, maquiagem, creme, protetor solar, manicure, salão, cabeleireiro, barbearia, depilação → "Higiene e Beleza" [PESSOAL]
+• gasolina, etanol, diesel, GNV, Uber, 99, táxi, ônibus, metrô, passagem, pedágio, IPVA, seguro do carro, manutenção carro, troca de óleo, pneu → "Transporte" [PESSOAL]
+• plano de saúde, médico, dentista, farmácia, remédio, exame, cirurgia, psicólogo, fisioterapia, suplemento, whey, vitamina → "Saúde e Bem-estar" [PESSOAL]
+• escola, faculdade, mensalidade, curso, inglês, material escolar, livro, apostila, cursinho → "Educação" [PESSOAL]
+• cinema, teatro, show, festival, parque, jogo, game, steam, PS, xbox, viagem lazer, hobby → "Lazer e Entretenimento" [PESSOAL]
+• ração, veterinário, pet shop, vacina animal, banho e tosa, antipulgas → "Pet" [PESSOAL]
+• dízimo, oferta, doação, ONG, vaquinha, cesta básica → "Doações e Solidariedade" [PESSOAL]
+• presente, aniversário, natal, dia das mães, namorados, casamento, formatura → "Presentes e Comemorações" [PESSOAL]
+• tinta, piso, reforma, tapete, cortina, móvel, decoração, pedreiro → "Reformas e Decoração" [PESSOAL]
+• conserto urgente, chaveiro, vidraceiro, encanador urgente, guincho, multa por atraso, juro cartão → "Emergências e Imprevistos" [PESSOAL]
+• seguro residencial, seguro de vida, apólice pessoal → "Seguro Pessoal / Residencial" [PESSOAL]
+• IPTU, IPVA, IR pessoal, DARF pessoal → "Impostos Pessoais" [PESSOAL]
+• salário recebido, holerite, 13°, férias recebidas, PLR → "Renda / Salário" [PESSOAL]
+• freelance, bico, renda extra, venda pessoal, pix recebido → "Renda Extra / Freelance" [PESSOAL]
+• funcionário, pró-labore, folha de pagamento → "Folha de Pagamento" [COMERCIAL]
+• INSS patronal, FGTS empresa, encargos trabalhistas → "Encargos Trabalhistas" [COMERCIAL]
+• aluguel do escritório, aluguel da loja, aluguel do galpão → "Aluguel Comercial" [COMERCIAL]
+• luz da empresa, água da empresa, energia comercial → "Energia e Utilities" [COMERCIAL]
+• internet empresarial, PABX, plano corporativo → "Internet e Telecom" [COMERCIAL]
+• fornecedor, matéria-prima, insumo, embalagem → "Fornecedores e Insumos" [COMERCIAL]
+• estoque, mercadoria para revenda, compra de produto → "Estoque e Mercadoria" [COMERCIAL]
+• Google Ads, Meta Ads, marketing, publicidade, anúncio → "Marketing e Publicidade" [COMERCIAL]
+• DAS, MEI, ISS, ICMS, IRPJ, CSLL, DARF empresa → "Impostos e Tributos" [COMERCIAL]
+• contador, contabilidade, advogado, consultoria jurídica → "Contabilidade e Jurídico" [COMERCIAL]
+• computador, software, licença, sistema, ERP → "Equipamentos e TI" [COMERCIAL]
+• frete, transportadora, motoboy, combustível empresa → "Logística e Transporte" [COMERCIAL]
+• manutenção do escritório, reforma comercial → "Manutenção Predial" [COMERCIAL]
+• limpeza do escritório, terceirização limpeza → "Limpeza Comercial" [COMERCIAL]
+• tarifa bancária, IOF, juros bancários → "Despesas Bancárias" [COMERCIAL]
+• curso funcionário, treinamento, recrutamento → "Treinamento e RH" [COMERCIAL]
+• passagem empresa, hotel empresa, diária → "Viagens Corporativas" [COMERCIAL]
+• seguro empresarial, seguro frota → "Seguros Empresariais" [COMERCIAL]
+• venda, faturamento, nota fiscal emitida, serviço prestado → "Receita Operacional" [COMERCIAL]
+• consulta médica, retorno médico, prontuário, estetoscópio, esfigmomanômetro, termômetro clínica, otoscópio, luva de procedimento clínica, jaleco médico, lençol de papel clínica, mesa de exames, lixeira hospitalar clínica → "Clínica Médica (Insumos)" [COMERCIAL]
+• consulta odontológica, profilaxia, broca odontológica, restauração dental, canal endodontia, extração dental, implante, aparelho ortodôntico, autoclave dental, anestésico dental, seringa carpule, alginato, gesso dental → "Clínica Odontológica (Insumos)" [COMERCIAL]
+• internação, UTI, centro cirúrgico, emergência hospitalar, pronto-socorro, soro fisiológico hospitalar, cateter venoso, sonda nasogástrica, sonda vesical, fralda hospitalar, bomba de infusão, respirador mecânico, desfibrilador, maca, gases medicinais, autoclave central hospital → "Hospital (Insumos e Operação)" [COMERCIAL]
+• empilhadeira, transpalete, palete supermercado, gôndola supermercado, PDV supermercado, câmara fria supermercado, etiqueta EAS, sensor antifurto, sistema ERP supermercado, nivelador de doca, câmera CCTV supermercado → "Supermercado (Operação)" [COMERCIAL]
+• forno padaria, amassadeira, cilindro de massa, câmara de fermentação, fatiadora padaria, batedeira planetária padaria, farinha de trigo padaria, fermento biológico, forma de bolo, saco de confeitar, expositor de pães, alvará ANVISA padaria → "Padaria e Confeitaria (Operação)" [COMERCIAL]
+• SNGPC, tarja preta farmácia, geladeira de medicamentos, freezer de vacinas, datalogger farmácia, cabine de fluxo laminar, seladora de blister, licença ANVISA farmácia, ERP farmacêutico, descarpak, cápsula vazia, balança de precisão farmácia → "Farmácia (Operação)" [COMERCIAL]
+• fogão industrial restaurante, comanda eletrônica, taxa iFood, taxa Rappi, bag de entrega, marmita descartável, embalagem delivery, câmara fria restaurante, blast chiller, fritadeira industrial restaurante, exaustor industrial restaurante → "Restaurante (Operação)" [COMERCIAL]
+• moedor de carne, serra de fita açougue, luva de malha de aço, câmara de maturação, SIF, bandeja isopor açougue, etiqueta validade carne, defumador industrial, cure nitrito, chaira, gancho de aço, trilho aéreo → "Açougue (Operação)" [COMERCIAL]
+• fatiador de frios mercearia, balança hortifrúti mercearia, registradora elétrica, etiquetadora de preço mercearia, sacola plástica mercearia, gôndola mercearia, armadilha de roedor, dedetização mercearia, PDV mercearia → "Mercearia (Operação)" [COMERCIAL]
+• taxa Uber, taxa 99, taxa inDriver, repasse de viagem, gasolina motorista app, rastreador veicular, chip de dados motorista, MEI motorista, DASN motorista, nota fiscal motorista, suporte de celular carro, extintor automotivo, cadeirinha bebê → "Transporte por App (Operação)" [COMERCIAL]
+
+HOJE: ${dayOfWeek}, ${now.toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" })}
+DATA ISO: ${today}
+
+EXEMPLOS:
+Entrada: "100, telefone celular"
+Saída: {"tipo":"Conta Telefone Celular","valor":100.00,"natureza":"PAGAR","contexto":"PESSOAL","categoria":"Internet e Telefone","vencimento":null,"confidence":0.88,"needsMoreInfo":false,"missingFields":[],"responseMessage":"✅ *Conta Telefone Celular* registrada!\\n💰 R$ 100,00\\n📂 Internet e Telefone 📱"}
+
+Entrada: "luz 97 dia 15"
+Saída: {"tipo":"Conta de Luz","valor":97.00,"natureza":"PAGAR","contexto":"PESSOAL","categoria":"Energia Elétrica","vencimento":"${today.substring(0, 7)}-15","confidence":0.95,"needsMoreInfo":false,"missingFields":[],"responseMessage":"✅ *Conta de Luz* registrada!\\n💰 R$ 97,00 · 📅 dia 15\\n📂 Energia Elétrica 💡"}
+
+Entrada: "recebi 2500 salário"
+Saída: {"tipo":"Salário","valor":2500.00,"natureza":"RECEBER","contexto":"PESSOAL","categoria":"Renda / Salário","vencimento":null,"confidence":0.97,"needsMoreInfo":false,"missingFields":[],"responseMessage":"✅ *Salário* registrado!\\n💰 R$ 2.500,00\\n📂 Renda / Salário 💰"}
+
+Entrada: "compra no mercado 350 ontem"
+Saída: {"tipo":"Compras no Supermercado","valor":350.00,"natureza":"PAGAR","contexto":"PESSOAL","categoria":"Alimentação e Mercado","vencimento":"${tomorrow}","confidence":0.90,"needsMoreInfo":false,"missingFields":[],"responseMessage":"✅ *Compras no Supermercado* registrada!\\n💰 R$ 350,00\\n📂 Alimentação e Mercado 🛒"}
+
+Entrada: "paguei fornecedor 1500"
+Saída: {"tipo":"Pagamento Fornecedor","valor":1500.00,"natureza":"PAGAR","contexto":"COMERCIAL","categoria":"Fornecedores e Insumos","vencimento":null,"confidence":0.90,"needsMoreInfo":false,"missingFields":[],"responseMessage":"✅ *Pagamento Fornecedor* registrado!\\n💰 R$ 1.500,00\\n📂 Fornecedores e Insumos 🏭"}
+
+Entrada: "conta do cartão"
+Saída: {"tipo":"Fatura Cartão de Crédito","valor":null,"natureza":"PAGAR","contexto":"PESSOAL","categoria":"Emergências e Imprevistos","vencimento":null,"confidence":0.55,"needsMoreInfo":true,"missingFields":["valor","vencimento"],"responseMessage":"📝 Entendi que é a *Fatura do Cartão*. Pode informar:\\n• 💰 Qual o valor?\\n• 📅 Qual a data de vencimento?"}
+
+Retorne APENAS o JSON, sem markdown, sem explicações.`;
+}
+
+function buildAudioExtractionPrompt(
+  allowedContexts: ("PESSOAL" | "COMERCIAL")[],
+  categories: Array<{ context: string; name: string; description: string | null }>
+): string {
+  return (
+    buildExtractionPrompt(allowedContexts, categories) +
+    `\n\nCAMPO ADICIONAL OBRIGATÓRIO PARA ÁUDIO:\n` +
+    `- "transcription": transcrição em texto do áudio em português brasileiro\n\n` +
+    `Primeiro entenda o áudio. Depois retorne SOMENTE o JSON final com todos os campos.`
+  );
+}
+
+// ─── Chamada para provedores externos ─────────────────────────────────────────
+async function callProvider(
+  provider: string,
+  apiKey: string,
+  model: string,
+  messages: AIMessage[],
+  apiUrl?: string | null
+): Promise<{ content: string; usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number } }> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  let url = "";
+  let body: Record<string, unknown> = {};
+
+  switch (provider) {
+    case "OPENAI":
+    case "BUILTIN":
+      url = "https://api.openai.com/v1/chat/completions";
+      headers["Authorization"] = `Bearer ${apiKey}`;
+      body = { model: normalizeModelForProvider(provider, model), messages, temperature: 0.1, max_tokens: 600 };
+      break;
+
+    case "GEMINI": {
+      const geminiModel = normalizeModelForProvider(provider, model);
+      url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${apiKey}`;
+      const sysMsg = messages.find((m) => m.role === "system");
+      const userMsgs = messages.filter((m) => m.role !== "system");
+      body = {
+        ...(sysMsg && { system_instruction: { parts: [{ text: sysMsg.content }] } }),
+        contents: userMsgs.map((m) => ({
+          role: m.role === "assistant" ? "model" : "user",
+          parts: [{ text: m.content }],
+        })),
+        generationConfig: { temperature: 0.1, maxOutputTokens: 600 },
+      };
+      break;
+    }
+
+    case "GROQ":
+      url = "https://api.groq.com/openai/v1/chat/completions";
+      headers["Authorization"] = `Bearer ${apiKey}`;
+      body = { model: normalizeModelForProvider(provider, model), messages, temperature: 0.1, max_tokens: 600 };
+      break;
+
+    case "GROK":
+      url = "https://api.x.ai/v1/chat/completions";
+      headers["Authorization"] = `Bearer ${apiKey}`;
+      body = { model: normalizeModelForProvider(provider, model), messages, temperature: 0.1, max_tokens: 600 };
+      break;
+
+    case "ABACUS": {
+      // Abacus usa nova Responses API internamente — não suporta response_format sem "json" em todas as msgs.
+      // Solução: injetar instrução JSON diretamente no system prompt + remover response_format.
+      const abacusMessages = messages.map((m, idx) =>
+        idx === 0 && m.role === "system"
+          ? {
+              ...m,
+              content:
+                m.content +
+                "\n\nYou MUST respond ONLY with a raw json object. No markdown, no explanation. Output json and nothing else.",
+            }
+          : m
+      );
+      url = (apiUrl || "https://routellm.abacus.ai") + "/v1/chat/completions";
+      headers["Authorization"] = `Bearer ${apiKey}`;
+      body = {
+        model: normalizeModelForProvider(provider, model),
+        messages: abacusMessages,
+        temperature: 0.1,
+        max_tokens: 600,
+        stream: false,
+      };
+      break;
+    }
+
+    case "OLLAMA": {
+      const base = apiUrl || "http://localhost:11434";
+      const ollamaModel = normalizeModelForProvider(provider, model);
+      await ensureOllamaModelAvailable(base, ollamaModel);
+      url = `${base}/api/chat`;
+      body = { model: ollamaModel, messages, stream: false, options: { temperature: 0.1 } };
+      break;
+    }
+
+    default:
+      throw new Error(`Provedor desconhecido: ${provider}`);
+  }
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(provider === "OLLAMA" ? 60000 : 30000),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Provedor ${provider} retornou ${response.status}: ${err}`);
+  }
+
+  const data = (await response.json()) as Record<string, unknown>;
+  const usageRaw = data.usage as Record<string, unknown> | undefined;
+  const usage = usageRaw
+    ? {
+        promptTokens: Number(usageRaw.prompt_tokens || usageRaw.input_tokens || 0),
+        completionTokens: Number(usageRaw.completion_tokens || usageRaw.output_tokens || 0),
+        totalTokens: Number(usageRaw.total_tokens || 0),
+      }
+    : undefined;
+
+  // Extrai texto conforme o formato de cada provedor
+  if (provider === "GEMINI") {
+    const candidates = data.candidates as Array<{ content: { parts: Array<{ text: string }> } }>;
+    return { content: candidates?.[0]?.content?.parts?.[0]?.text || "", usage };
+  } else if (provider === "OLLAMA") {
+    const msg = data.message as { content: string };
+    return { content: msg?.content || "", usage };
+  } else {
+    const choices = data.choices as Array<{ message: { content: string } }>;
+    return { content: choices?.[0]?.message?.content || "", usage };
+  }
+}
+
+// ─── Cadeia de provedores por fonte ─────────────────────────────────────────
+// Texto  → OLLAMA primeiro, ABACUS segundo, demais em seguida
+// Áudio  → ABACUS primeiro, OLLAMA segundo, demais em seguida
+async function getProviderChain(source: "text" | "audio" = "text") {
+  const all = await prisma.aiProviderConfig.findMany({
+    where: { enabled: true },
+    orderBy: { id: "asc" },
+  });
+
+  // Cadeia de fallback: Groq → Abacus → Gemini (para ambos audio e texto)
+  const priority = ["GROQ", "ABACUS", "GEMINI", "OPENAI", "GROK", "OLLAMA"];
+
+  return [...all].sort((a, b) => {
+    const ai = priority.indexOf(a.provider);
+    const bi = priority.indexOf(b.provider);
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  });
+}
+
+async function getAbacusAudioModelChain(): Promise<string[]> {
+  try {
+    const setting = await prisma.systemSetting.findUnique({
+      where: { key: "abacus_audio_model_chain" },
+    });
+    return normalizeAudioModelChain(setting?.value);
+  } catch (err) {
+    logger.warn(`[AIService] Falha ao carregar cadeia de modelos de áudio da ABACUS: ${String(err)}`);
+    return DEFAULT_ABACUS_AUDIO_MODELS;
+  }
+}
+
+// ─── Transcrição de áudio com fallback para múltiplos provedores ────────────
+async function transcribeAudioWithProvider(
+  provider: string,
+  apiKey: string,
+  audioPath: string,
+): Promise<string | null> {
+  try {
+    if (provider === "GROQ") {
+      // Groq Whisper API para transcrição de áudio
+      const audioBuffer = await fs.promises.readFile(audioPath);
+      const formData = new FormData();
+      formData.append("file", new Blob([audioBuffer]), path.basename(audioPath));
+      formData.append("model", "whisper-large-v3-turbo");
+
+      const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: formData,
+        signal: AbortSignal.timeout(30000),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Groq Whisper retornou ${response.status}`);
+      }
+
+      const data = (await response.json()) as { text?: string };
+      return data.text || null;
+    }
+
+    // Para outros provedores, retornar nulo (não suportado ainda)
+    return null;
+  } catch (err) {
+    logger.warn(`[AIService] Transcrição com ${provider} falhou: ${String(err)}`);
+    return null;
+  }
+}
+
+export async function extractTransactionFromAudio(
+  audioPath: string,
+  history: AIMessage[] = [],
+  allowedContexts: ("PESSOAL" | "COMERCIAL")[] = ["PESSOAL", "COMERCIAL"],
+): Promise<ExtractedTransaction | null> {
+  const dbCategories = await prisma.expenseCategory.findMany({
+    where: { isActive: true },
+    select: { id: true, context: true, name: true, description: true },
+    orderBy: { displayOrder: "asc" },
+  });
+
+  const systemPrompt = buildAudioExtractionPrompt(allowedContexts, dbCategories);
+  
+  // Tenta provedores em cadeia: Groq → Abacus → Gemini
+  const chain = await getProviderChain("audio");
+  let lastError: unknown;
+
+  for (const provider of chain) {
+    if (!provider.apiKey && provider.provider !== "OLLAMA") continue;
+
+    const startedAt = Date.now();
+    const attempt = chain.indexOf(provider) + 1;
+
+    try {
+      let transcription: string | null = null;
+      let raw = "";
+
+      // Se Groq, tenta transcrever com Whisper
+      if (provider.provider === "GROQ") {
+        transcription = await transcribeAudioWithProvider(provider.provider, provider.apiKey || "", audioPath);
+        if (transcription) {
+          // Processa o texto transcrito
+          const messages: AIMessage[] = [
+            { role: "system", content: systemPrompt },
+            ...history.slice(-4),
+            { role: "user", content: `Transcrição de áudio: "${transcription}"\n\nAgora extraia a transação financeira e devolva apenas o JSON solicitado.` },
+          ];
+
+          const result = await callProvider(
+            provider.provider,
+            provider.apiKey || "",
+            normalizeModelForProvider(provider.provider, provider.model),
+            messages,
+            provider.apiUrl
+          );
+          raw = result.content;
+        }
+      } 
+      // Se Abacus, usa processamento nativo de áudio
+      else if (provider.provider === "ABACUS") {
+        const audioBuffer = await fs.promises.readFile(audioPath);
+        const audioBase64 = audioBuffer.toString("base64");
+        const audioFormat = detectAudioFormatFromPath(audioPath);
+        const baseUrl = (provider.apiUrl || "https://routellm.abacus.ai").replace(/\/+$/, "");
+        const endpoint = `${baseUrl}/v1/chat/completions`;
+
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${provider.apiKey || ""}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: provider.model || "gpt-4o-audio-preview",
+            temperature: 0.1,
+            max_tokens: 900,
+            stream: false,
+            messages: [
+              { role: "system", content: systemPrompt },
+              ...history.slice(-4),
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "text",
+                    text: "Ouça o áudio, entenda a transação financeira e devolva apenas o JSON solicitado.",
+                  },
+                  {
+                    type: "input_audio",
+                    input_audio: {
+                      data: audioBase64,
+                      format: audioFormat,
+                    },
+                  },
+                ],
+              },
+            ],
+          }),
+          signal: AbortSignal.timeout(25000),
+        });
+
+        if (!response.ok) {
+          throw new Error(`ABACUS retornou ${response.status}`);
+        }
+
+        const data = (await response.json()) as { choices?: Array<{ message?: { content?: unknown } }>; usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } };
+        raw = extractResponseContent(data?.choices?.[0]?.message?.content) || "";
+      }
+
+      if (!raw) continue;
+
+      raw = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+      const parsed = JSON.parse(raw) as ExtractedTransaction & { transcription?: string | null };
+      
+      const contexto: "PESSOAL" | "COMERCIAL" =
+        parsed.contexto === "COMERCIAL" ? "COMERCIAL" : "PESSOAL";
+      const catName = (parsed.categoria || "").trim();
+      const matched = dbCategories.find(
+        (c) => c.name.toLowerCase() === catName.toLowerCase() && c.context === contexto,
+      ) ?? dbCategories.find((c) => c.name.toLowerCase() === catName.toLowerCase());
+
+      logger.info(`[AIService] Extração de áudio via ${provider.provider} em ${Date.now() - startedAt}ms`);
+      
+      await writeAiUsageLog({
+        ts: new Date().toISOString(),
+        provider: provider.provider,
+        model: provider.model || "audio-default",
+        channel: "audio",
+        stage: "extract",
+        success: true,
+        latencyMs: Date.now() - startedAt,
+        fallbackUsed: attempt > 1,
+        attempt,
+      });
+
+      return {
+        tipo: parsed.tipo || "Conta",
+        valor: parsed.valor ?? null,
+        natureza: parsed.natureza === "RECEBER" ? "RECEBER" : "PAGAR",
+        contexto,
+        categoria: matched?.name ?? catName ?? "Outros",
+        categoryId: matched?.id ?? null,
+        vencimento: parsed.vencimento || null,
+        confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0.5,
+        needsMoreInfo: parsed.needsMoreInfo ?? true,
+        missingFields: parsed.missingFields || [],
+        responseMessage: parsed.responseMessage || "✅ Registrado!",
+        transcription: transcription || parsed.transcription?.trim() || null,
+      };
+    } catch (err) {
+      lastError = err;
+      await writeAiUsageLog({
+        ts: new Date().toISOString(),
+        provider: provider.provider,
+        model: provider.model || "audio-default",
+        channel: "audio",
+        stage: "extract",
+        success: false,
+        latencyMs: Date.now() - startedAt,
+        fallbackUsed: attempt > 1,
+        attempt,
+        error: String(err),
+      });
+      logger.warn(`[AIService] Extração de áudio com ${provider.provider} falhou — próximo fallback: ${String(err)}`);
+    }
+  }
+
+  logger.warn(`[AIService] Extração de áudio indisponível — todos provedores falharam: ${String(lastError)}`);
+  return null;
+}
+
+// ─── Extração de transação ────────────────────────────────────────────────────
+export async function extractTransaction(
+  userMessage: string,
+  history: AIMessage[] = [],
+  allowedContexts: ("PESSOAL" | "COMERCIAL")[] = ["PESSOAL", "COMERCIAL"],
+  source: "text" | "audio" = "text"
+): Promise<ExtractedTransaction> {
+  // Carrega categorias do DB (cache em memória por 5 min via closure não necessário — DB é rápido)
+  const dbCategories = await prisma.expenseCategory.findMany({
+    where: { isActive: true },
+    select: { id: true, context: true, name: true, description: true },
+    orderBy: { displayOrder: "asc" },
+  });
+
+  const messages: AIMessage[] = [
+    { role: "system", content: buildExtractionPrompt(allowedContexts, dbCategories) },
+    ...history.slice(-6),
+    { role: "user", content: userMessage },
+  ];
+
+  let raw = "";
+
+  try {
+    const chain = await getProviderChain(source);
+
+    if (chain.length === 0) {
+      throw new Error("Nenhum provedor de IA habilitado");
+    }
+
+    let lastError: unknown;
+    for (const provider of chain) {
+      const startedAt = Date.now();
+      const attempt = chain.indexOf(provider) + 1;
+      // Pula provedores sem API key (exceto OLLAMA)
+      if (provider.provider !== "OLLAMA" && !provider.apiKey) continue;
+
+      try {
+        logger.debug(`[AIService] Tentando provedor: ${provider.provider}`);
+        const providerResult = await callProvider(
+          provider.provider,
+          provider.apiKey || "",
+          normalizeModelForProvider(provider.provider, provider.model),
+          messages,
+          provider.apiUrl
+        );
+        raw = providerResult.content;
+
+        await writeAiUsageLog({
+          ts: new Date().toISOString(),
+          provider: provider.provider,
+          model: normalizeModelForProvider(provider.provider, provider.model),
+          channel: source,
+          stage: "extract",
+          success: Boolean(raw),
+          latencyMs: Date.now() - startedAt,
+          fallbackUsed: attempt > 1,
+          attempt,
+          promptTokens: providerResult.usage?.promptTokens,
+          completionTokens: providerResult.usage?.completionTokens,
+          totalTokens: providerResult.usage?.totalTokens,
+        });
+
+        if (raw) {
+          logger.debug(`[AIService] Sucesso com provedor: ${provider.provider}`);
+          break; // sucesso — para aqui
+        }
+      } catch (provErr) {
+        lastError = provErr;
+        await writeAiUsageLog({
+          ts: new Date().toISOString(),
+          provider: provider.provider,
+          model: normalizeModelForProvider(provider.provider, provider.model),
+          channel: source,
+          stage: "extract",
+          success: false,
+          latencyMs: Date.now() - startedAt,
+          fallbackUsed: attempt > 1,
+          attempt,
+          error: String(provErr),
+        });
+        logger.warn(`[AIService] Provedor ${provider.provider} falhou — tentando próximo: ${provErr}`);
+      }
+    }
+
+    if (!raw) throw lastError ?? new Error("Todos os provedores falharam");
+
+    // Limpa markdown se vier
+    raw = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+
+    const parsed = JSON.parse(raw) as ExtractedTransaction;
+
+    const contexto: "PESSOAL" | "COMERCIAL" =
+      parsed.contexto === "COMERCIAL" ? "COMERCIAL" : "PESSOAL";
+
+    // Resolve categoryId pelo nome retornado pela IA
+    const catName = (parsed.categoria || "").trim();
+    const matched = dbCategories.find(
+      (c) => c.name.toLowerCase() === catName.toLowerCase() && c.context === contexto
+    ) ?? dbCategories.find(
+      (c) => c.name.toLowerCase() === catName.toLowerCase()
+    );
+
+    return {
+      tipo: parsed.tipo || "Conta",
+      valor: parsed.valor ?? null,
+      natureza: parsed.natureza === "RECEBER" ? "RECEBER" : "PAGAR",
+      contexto,
+      categoria: matched?.name ?? catName ?? "Outros",
+      categoryId: matched?.id ?? null,
+      vencimento: parsed.vencimento || null,
+      confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0.5,
+      needsMoreInfo: parsed.needsMoreInfo ?? true,
+      missingFields: parsed.missingFields || [],
+      responseMessage: parsed.responseMessage || "✅ Registrado!",
+    };
+  } catch (err) {
+    logger.error("[AIService] Erro na extração:", err);
+    logger.debug("[AIService] Raw response:", raw);
+
+    // ─── Fallback: extração por regex ─────────────────────────────────────────
+    const normalized = userMessage.toLowerCase();
+
+    // Detectar valor
+    const valorMatch = normalized.match(/r?\$?\s*(\d{1,6}(?:[.,]\d{1,2})?)/);
+    const valorRaw = valorMatch?.[1]?.replace(",", ".");
+    const valor = valorRaw ? parseFloat(valorRaw) : null;
+
+    // Detectar natureza
+    const isReceita = /recebi|recebimento|entrada|salário|salario|faturei|venda|pix recebido/.test(normalized);
+    const natureza: "PAGAR" | "RECEBER" = isReceita ? "RECEBER" : "PAGAR";
+
+    // Detectar tipo/item a partir de palavras-chave
+    const keywordCategoryMap: Array<{ keywords: RegExp; category: string; tipo: string }> = [
+      // Transporte
+      { keywords: /gasolina|combust[ií]vel|etanol|diesel|abasteci|posto de gasolina/, category: "Transporte", tipo: "Combustível" },
+      { keywords: /uber|99|t[aá]xi|metr[oô]|[oô]nibus|passagem|pedágio|ipva|seguro do carro|troca de [oó]leo|pneu|alinhamento|amortecedor|bateria carro/, category: "Transporte", tipo: "Transporte" },
+      // Alimentação
+      { keywords: /mercado|supermercado|feira|hortifr[uú]ti|compra de alimento|comprei aliment|pa[oã]o de forma|mantiment/, category: "Alimentação e Mercado", tipo: "Compras no Mercado" },
+      { keywords: /restaurante|lanchonete|delivery|ifood|rappi|pizza|hamburger|hamburguer|marmita|sorvete|lanche|fast.?food|caf[eé] na rua|sushi|rodizio/, category: "Refeições Fora / Delivery", tipo: "Refeição" },
+      // Casa
+      { keywords: /luz|energia el[eé]trica|cpfl|enel|cemig|conta de luz|elektro/, category: "Energia Elétrica", tipo: "Conta de Luz" },
+      { keywords: /[aá]gua|esgoto|sabesp|sanepar|conta de [aá]gua|saneamento/, category: "Água e Saneamento", tipo: "Conta de Água" },
+      { keywords: /g[aá]s|botij[aã]o|glp|g[aá]s de cozinha/, category: "Gás", tipo: "Gás" },
+      { keywords: /internet|banda larga|fibra|tim|vivo|claro|oi\b|celular|plano m[oó]vel|recarga|chip/, category: "Internet e Telefone", tipo: "Internet / Telefone" },
+      { keywords: /aluguel|financiamento im[oó]vel|presta[cç][aã]o do ap[eê]|hipoteca/, category: "Moradia", tipo: "Aluguel" },
+      { keywords: /condom[ií]nio|taxa condominial/, category: "Condomínio", tipo: "Condomínio" },
+      { keywords: /detergente|sab[aã]o|amaciante|vassoura|rodo|esponja|faxineira|diarista|dedetiza[cç][aã]o|limpeza casa/, category: "Limpeza e Conservação", tipo: "Limpeza" },
+      // Sa[uú]de
+      { keywords: /farm[aá]cia|rem[eé]dio|medicamento|m[eé]dico|m[eé]dica|sa[uú]de|plano de sa[uú]de|exame|cirurgia|psic[oó]logo|fisioterapia|consulta/, category: "Saúde e Bem-estar", tipo: "Saúde" },
+      // Educa[cç][aã]o
+      { keywords: /escola|faculdade|mensalidade|curso|ingl[eê]s|apostila|material escolar|cursinho/, category: "Educação", tipo: "Educação" },
+      // Streaming
+      { keywords: /netflix|spotify|amazon prime|disney|hbo|globoplay|apple tv|youtube premium|tv a cabo|academia|gympass|smart fit/, category: "Assinaturas e Streaming", tipo: "Assinatura" },
+      // Presentes e Comemorações
+      { keywords: /presente|carta.*namorad|comprei.*namorad|namorad.*present|aniversari[oó]|natal|dia das m[aã]es|dia das m[aã]ezinhas|namorad[oa]|casamento|formatura|lembrancinha/, category: "Presentes e Comemorações", tipo: "Presente" },
+      // Vestu[aá]rio
+      { keywords: /roupa|cal[cç]a|camisa|vestido|t[eê]nis|sapato|sandália|meia|cueca|suti[aã]|moda|brech[oó]|cal[cç]ado/, category: "Vestuário e Calçados", tipo: "Roupas" },
+      // Higiene
+      { keywords: /shampoo|sabonete|pasta de dente|desodorante|perfume|maquiagem|creme|protetor solar|manicure|sal[aã]o|cabeleireiro|barbearia|depila[cç][aã]o/, category: "Higiene e Beleza", tipo: "Higiene / Beleza" },
+      // Pet
+      { keywords: /ra[cç][aã]o|veterin[aá]rio|pet shop|vacina animal|banho e tosa|antipulgas|pet\b/, category: "Pet", tipo: "Pet" },
+      // Lazer
+      { keywords: /cinema|teatro|show|festival|parque|game|steam|xbox|playstation|ps\d|viagem lazer|hobby|ingresso/, category: "Lazer e Entretenimento", tipo: "Lazer" },
+      // Doa[cç][oõ]es
+      { keywords: /d[ií]zimo|oferta|doa[cç][aã]o|ong|vaquinha|cesta b[aá]sica/, category: "Doações e Solidariedade", tipo: "Doação" },
+      // Reformas
+      { keywords: /tinta|piso|reforma|tapete|cortina|m[oó]vel|decora[cç][aã]o|pedreiro|marceneiro/, category: "Reformas e Decoração", tipo: "Reforma" },
+      // Imprevistos
+      { keywords: /conserto urgente|chaveiro|vidra[cç]eiro|encanador urgente|guincho|multa por atraso|juro cart[aã]o|conserto/, category: "Emergências e Imprevistos", tipo: "Imprevisto" },
+      // Renda
+      { keywords: /sal[aá]rio|holerite|13[°o]|f[eé]rias recebidas|plr/, category: "Renda / Salário", tipo: "Salário" },
+      { keywords: /freelance|bico|renda extra|trabalho extra|pix recebido/, category: "Renda Extra / Freelance", tipo: "Renda Extra" },
+    ];
+
+    let categoria = "";
+    let tipo = "";
+    for (const entry of keywordCategoryMap) {
+      if (entry.keywords.test(normalized)) {
+        categoria = entry.category;
+        tipo = entry.tipo;
+        break;
+      }
+    }
+
+    // Resolver categoryId
+    const ctx = allowedContexts[0] ?? "PESSOAL";
+    const matchedCat = categoria
+      ? dbCategories.find((c) => c.name === categoria) ?? null
+      : dbCategories.find((c) => c.name.toLowerCase().includes("outros") && c.context === ctx) ?? null;
+
+    if (valor !== null && valor > 0 && categoria) {
+      // Conseguimos extrair pelo regex
+      logger.info(`[AIService] Fallback regex extraiu: ${tipo} R$${valor} → ${categoria}`);
+      return {
+        tipo,
+        valor,
+        natureza,
+        contexto: ctx,
+        categoria: matchedCat?.name ?? categoria,
+        categoryId: matchedCat?.id ?? null,
+        vencimento: null,
+        confidence: 0.6,
+        needsMoreInfo: false,
+        missingFields: [],
+        responseMessage: `✅ *${tipo}* registrado!\n💰 R$ ${valor.toFixed(2).replace(".", ",")}\n📂 ${matchedCat?.name ?? categoria}`,
+      };
+    }
+
+    // Sem dados suficientes mesmo com regex
+    return {
+      tipo: tipo || "Conta",
+      valor,
+      natureza: "PAGAR",
+      contexto: ctx,
+      categoria: matchedCat?.name ?? "Outros",
+      categoryId: matchedCat?.id ?? null,
+      vencimento: null,
+      confidence: 0,
+      needsMoreInfo: true,
+      missingFields: valor ? ["tipo"] : ["tipo", "valor"],
+      responseMessage:
+        "⚠️ Ainda não consegui entender essa mensagem por completo.\n\n" +
+        "Se for um registro financeiro, envie neste formato:\n" +
+        "• *gasolina 120*\n" +
+        "• *luz 150 dia 20*\n" +
+        "• *recebi 500 de salário*\n\n" +
+        "Se você pediu relatório por e-mail, use:\n" +
+        "• *enviar pdf do resumo para email nome@dominio.com*\n\n" +
+        "_Algumas respostas podem levar alguns segundos para processamento._",
+    };
+  }
+}
+
+// ─── Teste de conexão com provedor ───────────────────────────────────────────
+export async function testProvider(
+  provider: string,
+  apiKey: string,
+  model: string,
+  apiUrl?: string
+): Promise<{ ok: boolean; message: string; latencyMs?: number }> {
+  const start = Date.now();
+  try {
+    const messages: AIMessage[] = [
+      { role: "user", content: "Responda apenas: OK" },
+    ];
+    const result = await callProvider(provider, apiKey, normalizeModelForProvider(provider, model), messages, apiUrl);
+    const latencyMs = Date.now() - start;
+    return { ok: true, message: `Conexão bem-sucedida (${latencyMs}ms). Resposta: "${result.content.substring(0, 50)}"`, latencyMs };
+  } catch (err) {
+    return { ok: false, message: String(err) };
+  }
+}
