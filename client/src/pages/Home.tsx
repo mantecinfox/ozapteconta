@@ -14,6 +14,10 @@ export default function Home() {
   const [activeUsers, setActiveUsers] = useState(187);
   const [totalSavings, setTotalSavings] = useState(86000);
   const [spotsLeft, setSpotsLeft] = useState(42);
+  const whatsappNumber = '553173124224';
+  const whatsappMessage = 'Olá! Quero começar a usar o O Zap Te Conta pelo WhatsApp.';
+  const whatsappLink = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(whatsappMessage)}`;
+  const whatsappQrCode = `https://api.qrserver.com/v1/create-qr-code/?size=320x320&data=${encodeURIComponent(whatsappLink)}`;
 
   useEffect(() => {
     // Simular contadores ao vivo
@@ -73,12 +77,14 @@ export default function Home() {
               </div>
 
               <div className="flex flex-col sm:flex-row gap-4">
-                <Button 
-                  size="lg" 
-                  className="bg-green-500 hover:bg-green-600 text-black font-bold h-14 px-8 rounded-lg text-lg"
-                >
-                  VER PLANOS <ArrowRight className="ml-2 w-5 h-5" />
-                </Button>
+                <a href={whatsappLink} target="_blank" rel="noreferrer">
+                  <Button 
+                    size="lg" 
+                    className="bg-green-500 hover:bg-green-600 text-black font-bold h-14 px-8 rounded-lg text-lg"
+                  >
+                    FALAR NO WHATSAPP <ArrowRight className="ml-2 w-5 h-5" />
+                  </Button>
+                </a>
                 <Button 
                   variant="outline" 
                   size="lg"
@@ -136,6 +142,50 @@ export default function Home() {
             <div className="bg-green-500 text-black p-5 rounded-2xl font-bold shadow-xl">
               <p className="text-3xl">{spotsLeft}</p>
               <p className="text-sm">Ativações promocionais</p>
+            </div>
+          </div>
+
+          <div className="mt-12 grid gap-8 lg:grid-cols-[1.1fr_0.9fr] items-center rounded-[2rem] border border-white/15 bg-white/10 p-6 md:p-8 shadow-2xl backdrop-blur">
+            <div className="text-left space-y-4">
+              <div className="inline-block rounded-full bg-green-500 px-4 py-2 text-sm font-bold text-black">
+                ACESSO IMEDIATO PELO WHATSAPP
+              </div>
+              <h3 className="text-3xl md:text-4xl font-bold leading-tight">
+                Escaneie o QR Code ou toque no botão para iniciar seu atendimento
+              </h3>
+              <p className="text-lg text-blue-100">
+                O cliente cai direto no WhatsApp do sistema e já começa os primeiros contatos para uso do ozapteconta.
+              </p>
+              <div className="space-y-2 text-green-200 text-sm font-bold">
+                <p>📱 Número oficial: +55 31 7312-4224</p>
+                <p>⚡ Link rápido com mensagem pronta</p>
+                <p>✅ Ideal para colocar no site, anúncio e material comercial</p>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                <a href={whatsappLink} target="_blank" rel="noreferrer">
+                  <Button size="lg" className="bg-green-500 hover:bg-green-600 text-black font-bold h-14 px-8 rounded-lg text-lg">
+                    INICIAR NO WHATSAPP <ArrowRight className="ml-2 w-5 h-5" />
+                  </Button>
+                </a>
+                <a
+                  href={whatsappLink}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center justify-center rounded-lg border-2 border-white px-6 py-4 text-lg font-bold text-white transition hover:bg-blue-700"
+                >
+                  ABRIR LINK DE ACESSO
+                </a>
+              </div>
+            </div>
+
+            <div className="mx-auto w-full max-w-sm rounded-[2rem] bg-white p-5 text-center text-black shadow-2xl">
+              <img
+                src={whatsappQrCode}
+                alt="QR Code para iniciar conversa no WhatsApp do O Zap Te Conta"
+                className="mx-auto w-full max-w-[280px] rounded-2xl border-4 border-green-500 bg-white p-3"
+              />
+              <p className="mt-4 text-lg font-bold text-blue-900">Escaneie para falar agora</p>
+              <p className="mt-2 text-sm text-gray-600">Se estiver no celular, toque no botão ao lado para abrir o WhatsApp automaticamente.</p>
             </div>
           </div>
         </div>
@@ -340,9 +390,11 @@ export default function Home() {
                 <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Sem busca de FIPE, mercado financeiro e criptomoedas</li>
               </ul>
 
-              <Button size="lg" className="w-full bg-blue-900 hover:bg-blue-800 text-white font-bold">
-                Assinar Padrão por R$ 4,99
-              </Button>
+              <a href={whatsappLink} target="_blank" rel="noreferrer" className="block">
+                <Button size="lg" className="w-full bg-blue-900 hover:bg-blue-800 text-white font-bold">
+                  Assinar Padrão por R$ 4,99
+                </Button>
+              </a>
             </div>
 
             <div className="relative bg-blue-900 text-white rounded-3xl border-2 border-green-500 p-8 shadow-2xl overflow-hidden">
@@ -368,9 +420,11 @@ export default function Home() {
                 <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-400 shrink-0" /> Informações sobre criptomoedas</li>
               </ul>
 
-              <Button size="lg" className="w-full bg-green-500 hover:bg-green-600 text-black font-bold">
-                Assinar Completo por R$ 9,99
-              </Button>
+              <a href={whatsappLink} target="_blank" rel="noreferrer" className="block">
+                <Button size="lg" className="w-full bg-green-500 hover:bg-green-600 text-black font-bold">
+                  Assinar Completo por R$ 9,99
+                </Button>
+              </a>
             </div>
           </div>
 
@@ -514,12 +568,14 @@ export default function Home() {
               onChange={(e) => setEmail(e.target.value)}
               className="px-6 py-4 rounded-lg text-black focus:outline-none focus:ring-2 focus:ring-green-500 flex-1 sm:flex-none text-lg"
             />
-            <Button 
-              size="lg"
-              className="bg-green-500 hover:bg-green-600 text-black font-bold h-14 px-8 rounded-lg text-lg"
-            >
-              QUERO ESCOLHER MEU PLANO <ArrowRight className="ml-2 w-5 h-5" />
-            </Button>
+            <a href={whatsappLink} target="_blank" rel="noreferrer">
+              <Button 
+                size="lg"
+                className="bg-green-500 hover:bg-green-600 text-black font-bold h-14 px-8 rounded-lg text-lg"
+              >
+                QUERO ESCOLHER MEU PLANO <ArrowRight className="ml-2 w-5 h-5" />
+              </Button>
+            </a>
           </div>
 
           <p className="text-sm text-green-300 font-bold">
