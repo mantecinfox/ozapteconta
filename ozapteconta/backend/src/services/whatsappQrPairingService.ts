@@ -46,10 +46,44 @@ class WhatsappQrPairingService {
   private processedMessageIds = new Set<string>();
   private unreadableNoticeAt = new Map<string, number>();
   private unreadableMessageTimers = new Map<string, NodeJS.Timeout>();
+  private unreadableTimersByRemote = new Map<string, Set<string>>();
   private readonly maxReconnectWindowMs = 250 * 24 * 60 * 60 * 1000; // 250 dias
 
   private unreadableTimerKey(accountId: number, messageId: string): string {
     return `${accountId}:${messageId}`;
+  }
+
+  private unreadableRemoteKey(accountId: number, remoteJid: string): string {
+    return `${accountId}:${remoteJid}`;
+  }
+
+  private trackUnreadableTimer(accountId: number, remoteJid: string, timerKey: string): void {
+    const remoteKey = this.unreadableRemoteKey(accountId, remoteJid);
+    const timerKeys = this.unreadableTimersByRemote.get(remoteKey) || new Set<string>();
+    timerKeys.add(timerKey);
+    this.unreadableTimersByRemote.set(remoteKey, timerKeys);
+  }
+
+  private untrackUnreadableTimer(accountId: number, remoteJid: string, timerKey: string): void {
+    const remoteKey = this.unreadableRemoteKey(accountId, remoteJid);
+    const timerKeys = this.unreadableTimersByRemote.get(remoteKey);
+    if (!timerKeys) return;
+    timerKeys.delete(timerKey);
+    if (timerKeys.size === 0) this.unreadableTimersByRemote.delete(remoteKey);
+  }
+
+  private clearUnreadableFollowUpsByRemoteJid(accountId: number, remoteJid: string): void {
+    const remoteKey = this.unreadableRemoteKey(accountId, remoteJid);
+    const timerKeys = this.unreadableTimersByRemote.get(remoteKey);
+    if (!timerKeys || timerKeys.size === 0) return;
+
+    for (const timerKey of timerKeys) {
+      const timer = this.unreadableMessageTimers.get(timerKey);
+      if (timer) clearTimeout(timer);
+      this.unreadableMessageTimers.delete(timerKey);
+    }
+
+    this.unreadableTimersByRemote.delete(remoteKey);
   }
 
   private clearUnreadableFollowUp(accountId: number, messageId: string): void {
@@ -68,6 +102,7 @@ class WhatsappQrPairingService {
     // completa dentro desse prazo (protocolo multi-device: "append" antes do "notify").
     const timer = setTimeout(async () => {
       this.unreadableMessageTimers.delete(key);
+      this.untrackUnreadableTimer(accountId, remoteJid, key);
       if (!this.shouldSendUnreadableNotice(remoteJid)) return;
 
       try {
@@ -83,6 +118,7 @@ class WhatsappQrPairingService {
     }, 8000);
 
     this.unreadableMessageTimers.set(key, timer);
+    this.trackUnreadableTimer(accountId, remoteJid, key);
   }
 
   private shouldSendUnreadableNotice(remoteJid: string): boolean {
@@ -400,6 +436,9 @@ class WhatsappQrPairingService {
             logger.info(`[WPP QR] jid ignorado: ${remoteJid}`);
             continue;
           }
+
+          // Cancela avisos de "mensagem ilegível" pendentes desse contato quando chega qualquer novo payload.
+          this.clearUnreadableFollowUpsByRemoteJid(accountId, remoteJid);
 
           // Resolve número: para @lid, busca o JID real no mapa de contatos
           let phone: string;

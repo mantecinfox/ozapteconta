@@ -15,6 +15,18 @@ import infinityPayService from "./infinityPayService";
 import { sendFinancialReportNow } from "./financialReportService";
 
 const ONBOARDING_TIMEOUT_MINUTES = 10;
+const AUDIO_PENDING_NOTICE_DELAY_MS = 2500;
+
+function scheduleAudioPendingNotice(phone: string): { cancel: () => void } {
+  const timeoutRef = setTimeout(() => {
+    sendMessage(phone, "🎤 Recebemos seu áudio. Aguarde alguns instantes, por gentileza.")
+      .catch((err) => logger.warn(`[Audio] Falha ao enviar aviso de processamento: ${String(err)}`));
+  }, AUDIO_PENDING_NOTICE_DELAY_MS);
+
+  return {
+    cancel: () => clearTimeout(timeoutRef),
+  };
+}
 
 // ─── Onboarding / Gates ────────────────────────────────────────────────────────
 
@@ -2103,8 +2115,7 @@ export async function processAudioBuffer(
       whatsappMediaId: mediaId,
     },
   });
-
-  await sendMessage(canonicalPhone, "🎤 Recebi seu áudio! Transcrevendo...");
+  const pendingNotice = scheduleAudioPendingNotice(canonicalPhone);
 
 
   const history = parseContext(user.conversationContext);
@@ -2128,6 +2139,7 @@ export async function processAudioBuffer(
       logger.info(`[Audio] Transcrição fallback: "${transcription}"`);
       extracted = await extractTransaction(transcription, history, allowedContexts, "audio");
     } else {
+      pendingNotice.cancel();
       await sendMessage(canonicalPhone, "⚠️ Não consegui entender o áudio. Pode reenviar ou mandar em texto simples?");
       return;
     }
@@ -2136,6 +2148,7 @@ export async function processAudioBuffer(
   if (transcription && (isBMRQuery(transcription) || isChoosingBMRFromMenu(transcription, history))) {
     const response = `🎤 _"${transcription}"_\n\n${formatBMRResponse(transcription)}`;
     await saveContext(canonicalPhone, [...history, { role: "user", content: `[áudio] ${transcription}` }, { role: "assistant", content: response }]);
+    pendingNotice.cancel();
     await sendMessage(canonicalPhone, response);
     return;
   }
@@ -2196,6 +2209,7 @@ export async function processAudioBuffer(
   }
 
   await saveContext(canonicalPhone, [...history, { role: "user", content: `[áudio] ${transcription || "sem transcrição textual"}` }, { role: "assistant", content: response }]);
+  pendingNotice.cancel();
   await sendMessage(canonicalPhone, response);
 }
 
@@ -2240,8 +2254,7 @@ export async function processAudio(
       whatsappMediaId: mediaId,
     },
   });
-
-  await sendMessage(canonicalPhone, "🎤 Recebi seu áudio! Processando...");
+  const pendingNotice = scheduleAudioPendingNotice(canonicalPhone);
 
   // Extrai transação da transcrição
   const history = parseContext(user.conversationContext);
@@ -2272,6 +2285,7 @@ export async function processAudio(
       logger.info(`[Audio] Transcrição fallback: "${transcription}"`);
       extracted = await extractTransaction(transcription, history, audioAllowedContexts, "audio");
     } else {
+      pendingNotice.cancel();
       await sendMessage(
         canonicalPhone,
         "⚠️ Não consegui entender o áudio. Pode reenviar ou mandar em texto simples?"
@@ -2283,12 +2297,14 @@ export async function processAudio(
   if (transcription && (isBMRQuery(transcription) || isChoosingBMRFromMenu(transcription, history))) {
     const response = `🎤 _"${transcription}"_\n\n${formatBMRResponse(transcription)}`;
     await saveContext(canonicalPhone, [...history, { role: "user", content: `[áudio] ${transcription}` }, { role: "assistant", content: response }]);
+    pendingNotice.cancel();
     await sendMessage(canonicalPhone, response);
     return;
   }
 
   let response: string;
 
+  pendingNotice.cancel();
   if (transcription && isNutritionQuery(transcription)) {
     const nutritionResponse = await resolveNutritionAnswer(transcription, history);
     response = nutritionResponse
