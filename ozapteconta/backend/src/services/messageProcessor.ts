@@ -1282,14 +1282,49 @@ function getNutritionMenu(): string {
   );
 }
 
+// ─── Mensagens de Aguarde ─────────────────────────────────────────────────────
+
+type LoadingType = "investment_data" | "investment_ai" | "diet_plan" | "nutrition_ai" | "market_data";
+
+const LOADING_MESSAGES: Record<LoadingType, string[]> = {
+  investment_data: [
+    `📊 *Buscando dados do mercado...*\n_Consultando preços, histórico e tendências em tempo real. Aguarde!_ ⏳`,
+    `🔍 *Analisando o mercado...*\n_Coletando dados dos últimos 3 meses. Só um instante!_ 📈`,
+    `📡 *Conectando às bolsas...*\n_Buscando cotações, variações e histórico semanal..._ ⏳`,
+    `🏦 *Verificando os dados...*\n_Consultando B3, CoinGecko e indicadores de tendência. Quase lá!_ 📊`,
+  ],
+  investment_ai: [
+    `🤖 *Nossa IA está analisando os dados...*\n_Processando indicadores, tendências e gerando insights. Pode demorar até 20 segundos!_ ⏳`,
+    `🧠 *Inteligência Artificial trabalhando...*\n_Cruzando dados históricos com padrões de mercado. Aguarde!_ 📈`,
+    `⚡ *Gerando análise personalizada...*\n_Nossa IA está revisando cada detalhe para você. Um instante!_ 🤖`,
+    `💡 *Processando sua análise de investimento...*\n_Isso leva alguns segundos. Que tal respirar fundo? 😄 Já já chega!_ ⏳`,
+  ],
+  diet_plan: [
+    `🥗 *Montando seu plano alimentar...*\n_Nossa IA está calculando macros, montando refeições e criando sua lista de compras. Aguarde!_ ⏳`,
+    `👩‍🍳 *Preparando seu cardápio personalizado...*\n_Calculando proteínas, carboidratos e calorias para o seu perfil. Já já fica pronto!_ 🥦`,
+    `🍽️ *Seu nutricionista IA está trabalhando...*\n_Criando um plano completo com café da manhã, almoço, jantar e lanches. Um instante!_ ⏳`,
+    `⚖️ *Calculando seu plano alimentar ideal...*\n_Analisando seu objetivo, metabolismo e preferências. Pode levar até 20 segundos!_ 🥗`,
+  ],
+  nutrition_ai: [
+    `🔍 *Consultando nossa base nutricional...*\n_Verificando calorias, macros e informações do alimento. Aguarde!_ ⏳`,
+    `🥦 *Nossa IA nutricional está analisando...*\n_Buscando dados de proteínas, carboidratos e gorduras. Só um instante!_ 💪`,
+    `📊 *Calculando os macros...*\n_Verificando a composição nutricional completa. Quase pronto!_ 🍎`,
+  ],
+  market_data: [
+    `💹 *Buscando cotações em tempo real...*\n_Conectando ao Banco Central e bolsas. Aguarde!_ ⏳`,
+    `📡 *Consultando o mercado...*\n_Buscando os dados mais recentes. Um instante!_ 💰`,
+    `🌐 *Atualizando dados financeiros...*\n_Conectando às fontes de mercado. Já já!_ 📊`,
+  ],
+};
+
+async function sendLoadingMessage(phone: string, type: LoadingType): Promise<void> {
+  const msgs = LOADING_MESSAGES[type];
+  const msg = msgs[Math.floor(Math.random() * msgs.length)];
+  await sendMessage(phone, msg);
+}
+
 function getNutritionClarificationPrompt(text: string): string | null {
-  const normalized = text
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const normalized = text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
   if (!normalized || isNutritionQuery(text)) return null;
   if (normalized.length > 80) return null;
@@ -1771,6 +1806,7 @@ export async function processText(phone: string, senderName: string | undefined,
 
     // ── Plano de Dieta Completo via IA ────────────────────────────────────────
     if (isDietPlanRequest(text, history)) {
+      await sendLoadingMessage(canonicalPhone, "diet_plan");
       response =
         (await generateDietPlan(text, history)) ??
         `🥗 Para montar seu plano alimentar ideal, me diz:\n\n` +
@@ -1805,6 +1841,7 @@ export async function processText(phone: string, senderName: string | undefined,
     }
 
     if (isNutritionQuery(text)) {
+      await sendLoadingMessage(canonicalPhone, "nutrition_ai");
       response =
         (await resolveNutritionAnswer(text, history)) ??
         "🥗 Posso analisar alimentos, calorias e macros, mas preciso que você diga o alimento e, se possível, a quantidade.\n\nExemplo: *2 ovos, arroz, feijão e bife no almoço*";
@@ -1865,29 +1902,33 @@ export async function processText(phone: string, senderName: string | undefined,
           break;
 
         case "top_stocks":
+          await sendLoadingMessage(canonicalPhone, "investment_data");
           investResponse = await getTopB3Stocks();
           break;
 
         case "top_cryptos":
+          await sendLoadingMessage(canonicalPhone, "investment_data");
           investResponse = await getTopCryptosReport();
           break;
 
         case "stock_analysis": {
           const ticker = investQuery.ticker!;
-          // Busca dados reais primeiro
+          await sendLoadingMessage(canonicalPhone, "investment_data");
           const rawData = await analyzeStockForInvestment(ticker);
-          // Enriquece com análise de IA usando os dados como contexto
+          await sendLoadingMessage(canonicalPhone, "investment_ai");
           const aiAnalysis = await generateInvestmentAdvice(text, rawData, history);
           investResponse = rawData + (aiAnalysis ? "\n\n" + aiAnalysis : "");
           break;
         }
 
         case "crypto_analysis": {
+          await sendLoadingMessage(canonicalPhone, "investment_data");
           const rawData = await analyzeCryptoForInvestment(
             investQuery.coinId!,
             investQuery.displayName!,
             investQuery.symbol!,
           );
+          await sendLoadingMessage(canonicalPhone, "investment_ai");
           const aiAnalysis = await generateInvestmentAdvice(text, rawData, history);
           investResponse = rawData + (aiAnalysis ? "\n\n" + aiAnalysis : "");
           break;
@@ -1914,6 +1955,10 @@ export async function processText(phone: string, senderName: string | undefined,
           "🔒 Mercado Financeiro é um recurso do plano *Completo (R$ 9,90)*.\n\nSeu plano atual continua com contas a pagar/receber para PF e PJ.",
         );
         return;
+      }
+      // Cotações e resumo de mercado precisam buscar dados externos
+      if (marketQuery.type !== "help_market") {
+        await sendLoadingMessage(canonicalPhone, "market_data");
       }
       response = await executeMarketQuery(marketQuery);
       await sendMessage(canonicalPhone, response);
