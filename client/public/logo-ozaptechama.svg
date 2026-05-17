@@ -5,10 +5,16 @@
       <stop offset="0%" style="stop-color:#10B981;stop-opacity:1" />
       <stop offset="100%" style="stop-color:#059669;stop-opacity:1" />
     </linearGradient>
+    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.3"/>
+    </filter>
   </defs>
   
-  <!-- Círculo principal -->
-  <circle cx="60" cy="60" r="45" fill="url(#logoGradient)" opacity="0.9"/>
+  <!-- Círculo branco ao redor (background) -->
+  <circle cx="60" cy="60" r="50" fill="white" filter="url(#shadow)"/>
+  
+  <!-- Círculo principal com gradiente -->
+  <circle cx="60" cy="60" r="45" fill="url(#logoGradient)"/>
   
   <!-- Checkmark -->
   <path d="M 45 60 L 55 70 L 75 50" stroke="white" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
