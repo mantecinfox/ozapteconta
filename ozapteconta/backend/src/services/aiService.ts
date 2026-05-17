@@ -198,6 +198,14 @@ function detectAudioFormatFromPath(audioPath: string): "ogg" | "mp3" | "wav" | "
   return "ogg";
 }
 
+function detectAudioMimeFromPath(audioPath: string): string {
+  const format = detectAudioFormatFromPath(audioPath);
+  if (format === "mp3") return "audio/mpeg";
+  if (format === "wav") return "audio/wav";
+  if (format === "mp4") return "audio/mp4";
+  return "audio/ogg";
+}
+
 function extractResponseContent(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -562,13 +570,13 @@ async function getProviderChain(source: "text" | "audio" = "text") {
     orderBy: { id: "asc" },
   });
 
-  const audioCapableProviders = new Set(["ABACUS", "GROQ", "OPENAI"]);
+  const audioCapableProviders = new Set(["GEMINI", "ABACUS", "GROQ"]);
   const candidates = source === "audio"
     ? all.filter((provider) => audioCapableProviders.has(provider.provider))
     : all;
 
   const priority = source === "audio"
-    ? ["ABACUS", "GROQ", "OPENAI"]
+    ? ["GEMINI", "ABACUS", "GROQ"]
     : ["GROQ", "ABACUS", "GEMINI", "OPENAI", "GROK", "OLLAMA"];
 
   return [...candidates].sort((a, b) => {
@@ -939,8 +947,50 @@ export async function extractTransactionFromAudio(
       let transcription: string | null = null;
       let raw = "";
 
+      if (provider.provider === "GEMINI") {
+        const audioBuffer = await fs.promises.readFile(audioPath);
+        const audioBase64 = audioBuffer.toString("base64");
+        const geminiModel = normalizeModelForProvider(provider.provider, provider.model);
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${provider.apiKey || ""}`;
+
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            system_instruction: { parts: [{ text: systemPrompt }] },
+            contents: [
+              ...history.slice(-4).map((message) => ({
+                role: message.role === "assistant" ? "model" : "user",
+                parts: [{ text: message.content }],
+              })),
+              {
+                role: "user",
+                parts: [
+                  { text: "Ouça o áudio, transcreva internamente e devolva apenas o JSON solicitado." },
+                  {
+                    inline_data: {
+                      mime_type: detectAudioMimeFromPath(audioPath),
+                      data: audioBase64,
+                    },
+                  },
+                ],
+              },
+            ],
+            generationConfig: { temperature: 0.1, maxOutputTokens: 900 },
+          }),
+          signal: AbortSignal.timeout(45000),
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`GEMINI áudio retornou ${response.status}: ${errText.substring(0, 260)}`);
+        }
+
+        const data = (await response.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>; usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number } };
+        raw = data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join(" ").trim() || "";
+      }
       // Se Groq, tenta transcrever com Whisper
-      if (provider.provider === "GROQ") {
+      else if (provider.provider === "GROQ") {
         transcription = await transcribeAudioWithProvider(provider.provider, provider.apiKey || "", audioPath);
         if (transcription) {
           // Processa o texto transcrito
@@ -965,6 +1015,9 @@ export async function extractTransactionFromAudio(
         const audioBuffer = await fs.promises.readFile(audioPath);
         const audioBase64 = audioBuffer.toString("base64");
         const audioFormat = detectAudioFormatFromPath(audioPath);
+        if (audioFormat !== "wav" && audioFormat !== "mp3") {
+          throw new Error(`ABACUS não aceita áudio ${audioFormat} direto; pulando para próximo provedor`);
+        }
         const baseUrl = (provider.apiUrl || "https://routellm.abacus.ai").replace(/\/+$/, "");
         const endpoint = `${baseUrl}/v1/chat/completions`;
 
