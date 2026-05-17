@@ -1325,20 +1325,32 @@ function getNutritionMenu(): string {
 
 // ─── Mensagens de Aguarde ─────────────────────────────────────────────────────
 
-type LoadingType = "investment_data" | "investment_ai" | "diet_plan" | "nutrition_ai" | "market_data" | "general_ai";
+type LoadingType =
+  | "investment_data"
+  | "investment_ai"
+  | "crypto_data"
+  | "diet_plan"
+  | "nutrition_ai"
+  | "market_data"
+  | "finance_ai"
+  | "commerce_ai"
+  | "general_ai";
 
 const LOADING_MESSAGES: Record<LoadingType, string[]> = {
   investment_data: [
-    `📊 *Buscando dados do mercado...*\n_Consultando preços, histórico e tendências em tempo real. Aguarde!_ ⏳`,
-    `🔍 *Analisando o mercado...*\n_Coletando dados dos últimos 3 meses. Só um instante!_ 📈`,
-    `📡 *Conectando às bolsas...*\n_Buscando cotações, variações e histórico semanal..._ ⏳`,
-    `🏦 *Verificando os dados...*\n_Consultando B3, CoinGecko e indicadores de tendência. Quase lá!_ 📊`,
+    `📊 *Nossa IA de investimentos está analisando...*\n_Buscando preços, histórico e tendências dos ativos. Só um instante!_ 📈`,
+    `🔍 *Analisando o mercado de ações...*\n_Coletando variações e desempenho recente para sua consulta. Aguarde!_ 📉`,
+    `📡 *Conectando às bolsas...*\n_Buscando cotações, volume e movimentação semanal. Quase lá!_ ⏳`,
   ],
   investment_ai: [
-    `🤖 *Nossa IA está analisando os dados...*\n_Processando indicadores, tendências e gerando insights. Pode demorar até 20 segundos!_ ⏳`,
-    `🧠 *Inteligência Artificial trabalhando...*\n_Cruzando dados históricos com padrões de mercado. Aguarde!_ 📈`,
-    `⚡ *Gerando análise personalizada...*\n_Nossa IA está revisando cada detalhe para você. Um instante!_ 🤖`,
-    `💡 *Processando sua análise de investimento...*\n_Isso leva alguns segundos. Que tal respirar fundo? 😄 Já já chega!_ ⏳`,
+    `🤖 *Nossa IA de investimentos está analisando...*\n_Cruzando indicadores, risco e cenário para montar sua análise. Só um instante!_ 📈`,
+    `🧠 *Inteligência Artificial de investimentos trabalhando...*\n_Combinando histórico, tendência e contexto de mercado. Aguarde!_ ⏳`,
+    `⚡ *Gerando recomendação de investimento...*\n_Nossa IA está estruturando os principais insights para você. Quase pronto!_ 💡`,
+  ],
+  crypto_data: [
+    `₿ *Nossa IA de criptomoedas está analisando...*\n_Buscando preço, volatilidade e tendência das moedas. Só um instante!_ 📊`,
+    `🌐 *Consultando o mercado cripto...*\n_Coletando dados de capitalização, volume e variação recente. Aguarde!_ ⏳`,
+    `📡 *Atualizando dados de criptoativos...*\n_Buscando informações mais recentes para sua análise. Quase lá!_ 🚀`,
   ],
   diet_plan: [
     `🥗 *Montando seu plano alimentar...*\n_Nossa IA está calculando macros, montando refeições e criando sua lista de compras. Aguarde!_ ⏳`,
@@ -1352,9 +1364,19 @@ const LOADING_MESSAGES: Record<LoadingType, string[]> = {
     `📊 *Calculando os macros...*\n_Verificando a composição nutricional completa. Quase pronto!_ 🍎`,
   ],
   market_data: [
-    `💹 *Buscando cotações em tempo real...*\n_Conectando ao Banco Central e bolsas. Aguarde!_ ⏳`,
-    `📡 *Consultando o mercado...*\n_Buscando os dados mais recentes. Um instante!_ 💰`,
-    `🌐 *Atualizando dados financeiros...*\n_Conectando às fontes de mercado. Já já!_ 📊`,
+    `💹 *Nossa IA financeira está analisando...*\n_Buscando cotações e indicadores econômicos em tempo real. Só um instante!_ ⏳`,
+    `📡 *Consultando o mercado financeiro...*\n_Coletando os dados mais recentes para sua pergunta. Aguarde!_ 📊`,
+    `🌐 *Atualizando dados de finanças...*\n_Conectando às principais fontes de mercado. Quase pronto!_ 💰`,
+  ],
+  finance_ai: [
+    `💼 *Nossa IA financeira está analisando...*\n_Buscando valores, categorias e contexto da sua movimentação. Só um instante!_ 📊`,
+    `📈 *Processando sua solicitação financeira...*\n_Organizando dados de entradas, saídas e vencimentos. Aguarde!_ ⏳`,
+    `🧾 *Conferindo suas informações financeiras...*\n_Estruturando a resposta no padrão mais claro para você. Quase lá!_ ✅`,
+  ],
+  commerce_ai: [
+    `🏪 *Nossa IA comercial está analisando...*\n_Buscando dados de vendas, clientes e fluxo do negócio. Só um instante!_ 📊`,
+    `🤝 *Processando seu contexto de comércio...*\n_Organizando movimentações comerciais e previsões de recebimento. Aguarde!_ ⏳`,
+    `📦 *Estruturando sua análise comercial...*\n_Cruzando faturamento, despesas e indicadores da operação. Quase pronto!_ ✅`,
   ],
   general_ai: [
     `🤔 *Deixa eu pensar...*\n_Nossa IA está processando sua mensagem. Um segundo!_ ⏳`,
@@ -1367,6 +1389,13 @@ async function sendLoadingMessage(phone: string, type: LoadingType): Promise<voi
   const msgs = LOADING_MESSAGES[type];
   const msg = msgs[Math.floor(Math.random() * msgs.length)];
   await sendMessage(phone, msg);
+}
+
+function pickFinanceLoadingType(text: string): "finance_ai" | "commerce_ai" {
+  const n = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  return /\b(comercial|comercio|empresa|empresarial|cliente|fornecedor|venda|vendas|compras?|fatura|faturamento|pedido|estoque|nota fiscal|cnpj|pj|receita|lucro|margem)\b/.test(n)
+    ? "commerce_ai"
+    : "finance_ai";
 }
 
 function getNutritionClarificationPrompt(text: string): string | null {
@@ -1955,7 +1984,7 @@ export async function processText(phone: string, senderName: string | undefined,
           break;
 
         case "top_cryptos":
-          await sendLoadingMessage(canonicalPhone, "investment_data");
+          await sendLoadingMessage(canonicalPhone, "crypto_data");
           investResponse = await getTopCryptosReport();
           break;
 
@@ -1970,7 +1999,7 @@ export async function processText(phone: string, senderName: string | undefined,
         }
 
         case "crypto_analysis": {
-          await sendLoadingMessage(canonicalPhone, "investment_data");
+          await sendLoadingMessage(canonicalPhone, "crypto_data");
           const rawData = await analyzeCryptoForInvestment(
             investQuery.coinId!,
             investQuery.displayName!,
@@ -2015,6 +2044,8 @@ export async function processText(phone: string, senderName: string | undefined,
     // Extração via IA tem prioridade — determina contextos permitidos pelo plano
     const allowedContexts: ("PESSOAL" | "COMERCIAL")[] =
       clientProfile?.plan === "OFFICE" ? ["PESSOAL", "COMERCIAL"] : ["PESSOAL", "COMERCIAL"];
+
+    await sendLoadingMessage(canonicalPhone, pickFinanceLoadingType(text));
 
     const extracted = await extractTransaction(text, history, allowedContexts, "text");
 
