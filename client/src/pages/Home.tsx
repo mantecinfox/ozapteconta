@@ -33,11 +33,20 @@ export default function Home() {
     <div className="min-h-screen bg-white text-black">
       {/* Header Sticky com Urgência */}
       <header className="sticky top-0 z-50 bg-white text-gray-900 border-b-4 border-green-500 shadow-md">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <img src="/logo-ozaptechama.svg" alt="OZAPTECHAMA Logo" className="h-20 w-auto" />
+        <div className="container mx-auto px-4 py-3 flex items-center justify-between">
+          {/* Logo e Texto Centralizados */}
+          <div className="flex-1 flex items-center justify-center">
+            <div className="flex flex-col items-center">
+              <img src="/logo-ozaptechama.svg" alt="OZAPTECHAMA Logo" className="h-16 w-auto" />
+              <div className="text-center mt-1 hidden sm:block">
+                <p className="text-xs font-semibold text-gray-700">OZAPTECHAMA</p>
+                <p className="text-xs text-green-600">Seu Assistente Financeiro</p>
+              </div>
+            </div>
           </div>
-          <div className="hidden md:flex gap-4 text-sm items-center">
+          
+          {/* Botões à Direita */}
+          <div className="hidden md:flex gap-3 text-sm items-center">
             <span className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-bold border border-green-300">PIX OU CARTÃO</span>
             <Button className="bg-green-500 hover:bg-green-600 text-white font-bold">
               VER PLANOS
