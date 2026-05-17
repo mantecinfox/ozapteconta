@@ -665,6 +665,486 @@ export function getMarketHelp(): string {
     `   → "selic" / "IPCA" / "IGP-M"\n\n` +
     `📋 *Resumo Geral*\n` +
     `   → "mercado hoje" / "resumo do mercado"\n\n` +
+    `📈 *Análise de Investimento*\n` +
+    `   → "analisar PETR4" / "análise bitcoin"\n` +
+    `   → "melhores ações agora" / "top criptomoedas"\n` +
+    `   → "onde investir" / "onde colocar meu dinheiro"\n\n` +
     `_Os dados são atualizados automaticamente a cada 5 minutos._`
   );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ANÁLISE DE INVESTIMENTOS — histórico, tendência, mini-gráficos
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── Histórico B3 via brapi ───────────────────────────────────────────────────
+interface BrapiHistoricalPoint {
+  date: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+interface BrapiHistoricalResponse {
+  results: Array<{
+    symbol: string;
+    shortName: string;
+    longName?: string;
+    regularMarketPrice: number;
+    regularMarketChangePercent: number;
+    historicalDataPrice: BrapiHistoricalPoint[];
+  }>;
+}
+
+async function getBrapiHistorical(
+  ticker: string,
+  range = "3mo",
+  interval = "1wk",
+): Promise<{ quote: BrapiQuote; history: BrapiHistoricalPoint[] } | null> {
+  const sym = ticker.toUpperCase();
+  const cacheKey = `brapi_hist_${sym}_${range}`;
+  const cached = cacheGet<{ quote: BrapiQuote; history: BrapiHistoricalPoint[] }>(cacheKey);
+  if (cached) return cached;
+
+  try {
+    const token = config.market.brapiToken;
+    const tokenParam = token ? `&token=${token}` : "";
+    const url = `https://brapi.dev/api/quote/${sym}?range=${range}&interval=${interval}${tokenParam}`;
+    const data = await fetchJSON<BrapiHistoricalResponse>(url);
+    if (!data.results?.length) return null;
+    const r = data.results[0];
+    const result = {
+      quote: r as unknown as BrapiQuote,
+      history: r.historicalDataPrice || [],
+    };
+    cacheSet(cacheKey, result, TTL_SHORT);
+    return result;
+  } catch (e) {
+    logger.warn(`[market] getBrapiHistorical(${sym}) error`, e);
+    return null;
+  }
+}
+
+// ─── CoinGecko — mercados e histórico ────────────────────────────────────────
+interface CoinGeckoMarket {
+  id: string;
+  symbol: string;
+  name: string;
+  current_price: number;
+  price_change_percentage_24h: number;
+  price_change_percentage_7d_in_currency?: number;
+  price_change_percentage_30d_in_currency?: number;
+  market_cap: number;
+  total_volume: number;
+  high_24h: number;
+  low_24h: number;
+}
+
+async function getCoinGeckoMarkets(): Promise<CoinGeckoMarket[]> {
+  const cacheKey = "cg_markets";
+  const cached = cacheGet<CoinGeckoMarket[]>(cacheKey);
+  if (cached) return cached;
+
+  const url =
+    "https://api.coingecko.com/api/v3/coins/markets" +
+    "?vs_currency=brl&order=market_cap_desc&per_page=12&page=1&price_change_percentage=7d%2C30d";
+  const data = await fetchJSON<CoinGeckoMarket[]>(url);
+  cacheSet(cacheKey, data, TTL_SHORT);
+  return data;
+}
+
+async function getCoinGeckoHistory(coinId: string, days = 90): Promise<[number, number][]> {
+  const cacheKey = `cg_hist_${coinId}_${days}`;
+  const cached = cacheGet<[number, number][]>(cacheKey);
+  if (cached) return cached;
+
+  const url = `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart?vs_currency=brl&days=${days}`;
+  const data = await fetchJSON<{ prices: [number, number][] }>(url);
+  // Sample ~13 weekly points from daily data
+  const sampled = data.prices.filter((_, i) => i % 7 === 0).slice(-13);
+  cacheSet(cacheKey, sampled, TTL_SHORT);
+  return sampled;
+}
+
+// ─── Geração de mini-gráficos ASCII ──────────────────────────────────────────
+function buildSparkline(values: number[]): string {
+  if (!values.length) return "";
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const bars = "▁▂▃▄▅▆▇█";
+  return values.map(v => {
+    const idx = Math.min(7, Math.round(((v - min) / range) * 7));
+    return bars[idx];
+  }).join("");
+}
+
+function buildBarChart(labels: string[], changes: number[], maxWidth = 8): string {
+  const absMax = Math.max(...changes.map(Math.abs), 0.01);
+  return changes.map((c, i) => {
+    const width = Math.round((Math.abs(c) / absMax) * maxWidth);
+    const bar = (c >= 0 ? "█" : "░").repeat(Math.max(1, width)) + (c >= 0 ? "░" : "█").repeat(maxWidth - Math.max(1, width));
+    const icon = c >= 0 ? "▲" : "▼";
+    return `${labels[i]}: ${bar} ${icon}${fmtPct(c)}`;
+  }).join("\n");
+}
+
+function countHighs(closes: number[]): { highs: number; total: number; longestStreak: number } {
+  let highs = 0, streak = 0, longestStreak = 0;
+  for (let i = 1; i < closes.length; i++) {
+    if (closes[i] > closes[i - 1]) {
+      highs++;
+      streak++;
+      longestStreak = Math.max(longestStreak, streak);
+    } else {
+      streak = 0;
+    }
+  }
+  return { highs, total: Math.max(closes.length - 1, 1), longestStreak };
+}
+
+function trendLabel(pctChange: number, highs: number, total: number): string {
+  const ratio = highs / total;
+  if (pctChange > 15 && ratio > 0.65) return "🚀 Forte alta — momentum positivo";
+  if (pctChange > 5 && ratio > 0.55)  return "📈 Alta moderada — tendência positiva";
+  if (pctChange > 0)                  return "↗️ Levemente positivo — cautela";
+  if (pctChange > -5)                 return "↘️ Levemente negativo — observar";
+  if (pctChange > -15)                return "📉 Queda moderada — risco elevado";
+  return "💥 Forte queda — alto risco";
+}
+
+// ─── Análise completa de ação B3 ─────────────────────────────────────────────
+export async function analyzeStockForInvestment(ticker: string): Promise<string> {
+  const sym = ticker.toUpperCase();
+  try {
+    const data = await getBrapiHistorical(sym, "3mo", "1wk");
+    if (!data || !data.history.length) return getStockB3(sym);
+
+    const { history } = data;
+    const closes = history.map(h => h.close).filter(c => c > 0);
+    if (closes.length < 3) return getStockB3(sym);
+
+    const first = closes[0];
+    const last = closes[closes.length - 1];
+    const pct3m = ((last - first) / first) * 100;
+    const { highs, total, longestStreak } = countHighs(closes);
+    const sparkline = buildSparkline(closes);
+    const trend = trendLabel(pct3m, highs, total);
+
+    const q = data.quote as any;
+    const name = q.longName || q.shortName || sym;
+    const priceNow = q.regularMarketPrice ?? last;
+    const pctNow = q.regularMarketChangePercent ?? 0;
+    const minP = Math.min(...closes);
+    const maxP = Math.max(...closes);
+
+    // Monthly approximation (3 buckets)
+    const bucketSize = Math.floor(closes.length / 3);
+    const monthlyPcts: number[] = [];
+    const monthLabels: string[] = [];
+    for (let m = 0; m < 3; m++) {
+      const d = new Date();
+      d.setMonth(d.getMonth() - (2 - m));
+      monthLabels.push(d.toLocaleDateString("pt-BR", { month: "short" }));
+      const seg = closes.slice(m * bucketSize, (m + 1) * bucketSize);
+      monthlyPcts.push(seg.length >= 2 ? ((seg[seg.length - 1] - seg[0]) / seg[0]) * 100 : 0);
+    }
+
+    const nowIcon = pctNow >= 0 ? "📈" : "📉";
+    const overallIcon = pct3m >= 0 ? "📈" : "📉";
+
+    let msg = `${overallIcon} *Análise — ${sym}*\n`;
+    msg += `_${name}_\n`;
+    msg += `━━━━━━━━━━━━━━━━\n`;
+    msg += `💰 *Cotação:* R$ ${fmt(priceNow, 2)} ${nowIcon} ${fmtPct(pctNow)} hoje\n`;
+    msg += `📅 *Variação 3 meses:* *${fmtPct(pct3m)}*\n`;
+    msg += `📊 *Mini-gráfico (semanas):*\n${sparkline}\n`;
+    msg += `Mín: R$${fmt(minP, 2)}  Máx: R$${fmt(maxP, 2)}\n`;
+    msg += `━━━━━━━━━━━━━━━━\n`;
+    msg += `📅 *Histórico mensal:*\n`;
+    msg += buildBarChart(monthLabels, monthlyPcts) + "\n";
+    msg += `━━━━━━━━━━━━━━━━\n`;
+    msg += `🔢 *Estatísticas 3 meses:*\n`;
+    msg += `• Semanas em alta: *${highs}/${total}* (${Math.round((highs / total) * 100)}%)\n`;
+    msg += `• Maior sequência de altas: *${longestStreak}* semanas\n`;
+    msg += `• Tendência: ${trend}\n`;
+    msg += `━━━━━━━━━━━━━━━━\n`;
+    msg += `_Fonte: brapi.dev (B3)_\n`;
+    msg += `⚠️ _Dados informativos. Consulte um corretor certificado antes de investir._`;
+
+    return msg;
+  } catch (e) {
+    logger.error(`[market] analyzeStockForInvestment(${sym}) error`, e);
+    return getStockB3(sym);
+  }
+}
+
+// ─── Análise completa de criptomoeda ─────────────────────────────────────────
+
+const CRYPTO_MAP: Record<string, { coinId: string; symbol: string; displayName: string }> = {
+  bitcoin:    { coinId: "bitcoin",       symbol: "BTC",   displayName: "Bitcoin" },
+  btc:        { coinId: "bitcoin",       symbol: "BTC",   displayName: "Bitcoin" },
+  ethereum:   { coinId: "ethereum",      symbol: "ETH",   displayName: "Ethereum" },
+  eth:        { coinId: "ethereum",      symbol: "ETH",   displayName: "Ethereum" },
+  solana:     { coinId: "solana",        symbol: "SOL",   displayName: "Solana" },
+  sol:        { coinId: "solana",        symbol: "SOL",   displayName: "Solana" },
+  cardano:    { coinId: "cardano",       symbol: "ADA",   displayName: "Cardano" },
+  ada:        { coinId: "cardano",       symbol: "ADA",   displayName: "Cardano" },
+  bnb:        { coinId: "binancecoin",   symbol: "BNB",   displayName: "BNB" },
+  ripple:     { coinId: "ripple",        symbol: "XRP",   displayName: "XRP/Ripple" },
+  xrp:        { coinId: "ripple",        symbol: "XRP",   displayName: "XRP/Ripple" },
+  polkadot:   { coinId: "polkadot",      symbol: "DOT",   displayName: "Polkadot" },
+  dot:        { coinId: "polkadot",      symbol: "DOT",   displayName: "Polkadot" },
+  polygon:    { coinId: "matic-network", symbol: "MATIC", displayName: "Polygon" },
+  matic:      { coinId: "matic-network", symbol: "MATIC", displayName: "Polygon" },
+  chainlink:  { coinId: "chainlink",     symbol: "LINK",  displayName: "Chainlink" },
+  link:       { coinId: "chainlink",     symbol: "LINK",  displayName: "Chainlink" },
+  avalanche:  { coinId: "avalanche-2",   symbol: "AVAX",  displayName: "Avalanche" },
+  avax:       { coinId: "avalanche-2",   symbol: "AVAX",  displayName: "Avalanche" },
+  dogecoin:   { coinId: "dogecoin",      symbol: "DOGE",  displayName: "Dogecoin" },
+  doge:       { coinId: "dogecoin",      symbol: "DOGE",  displayName: "Dogecoin" },
+};
+
+export function resolveCryptoInfo(query: string): { coinId: string; symbol: string; displayName: string } | null {
+  const key = query.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return CRYPTO_MAP[key] ?? null;
+}
+
+export async function analyzeCryptoForInvestment(coinId: string, displayName: string, symbol: string): Promise<string> {
+  try {
+    const [histResult, marketsResult] = await Promise.allSettled([
+      getCoinGeckoHistory(coinId, 90),
+      getCoinGeckoMarkets(),
+    ]);
+
+    if (histResult.status !== "fulfilled" || !histResult.value.length) {
+      return getCrypto(symbol);
+    }
+
+    const prices = histResult.value.map(([, p]) => p);
+    const { highs, total, longestStreak } = countHighs(prices);
+    const pct3m = ((prices[prices.length - 1] - prices[0]) / prices[0]) * 100;
+    const sparkline = buildSparkline(prices);
+    const trend = trendLabel(pct3m, highs, total);
+
+    let currentPrice = prices[prices.length - 1];
+    let pct24h = 0;
+    let pct7d: number | undefined;
+    let pct30d: number | undefined;
+    let volume = 0;
+
+    if (marketsResult.status === "fulfilled") {
+      const coin = marketsResult.value.find(c => c.id === coinId || c.symbol === symbol.toLowerCase());
+      if (coin) {
+        currentPrice = coin.current_price;
+        pct24h = coin.price_change_percentage_24h ?? 0;
+        pct7d = coin.price_change_percentage_7d_in_currency;
+        pct30d = coin.price_change_percentage_30d_in_currency;
+        volume = coin.total_volume;
+      }
+    }
+
+    const minP = Math.min(...prices);
+    const maxP = Math.max(...prices);
+    const overallIcon = pct3m >= 0 ? "🚀" : "📉";
+    const todayIcon = pct24h >= 0 ? "📈" : "📉";
+
+    const volFmt = volume >= 1e9 ? `R$${fmt(volume / 1e9, 1)}B` : volume >= 1e6 ? `R$${fmt(volume / 1e6, 1)}M` : `R$${fmt(volume, 0)}`;
+
+    let msg = `${overallIcon} *Análise — ${displayName} (${symbol})*\n`;
+    msg += `━━━━━━━━━━━━━━━━\n`;
+    msg += `💰 *Cotação:* R$ ${fmt(currentPrice, 2)} ${todayIcon} ${fmtPct(pct24h)} (24h)\n`;
+    if (pct7d !== undefined)  msg += `📅 7 dias: ${fmtPct(pct7d)}\n`;
+    if (pct30d !== undefined) msg += `📅 30 dias: ${fmtPct(pct30d)}\n`;
+    msg += `📅 *3 meses:* *${fmtPct(pct3m)}*\n`;
+    msg += `━━━━━━━━━━━━━━━━\n`;
+    msg += `📊 *Mini-gráfico (13 semanas):*\n${sparkline}\n`;
+    msg += `Mín: R$${fmt(minP, 0)}  Máx: R$${fmt(maxP, 0)}\n`;
+    if (volume) msg += `📦 Volume 24h: ${volFmt}\n`;
+    msg += `━━━━━━━━━━━━━━━━\n`;
+    msg += `🔢 *Estatísticas 3 meses:*\n`;
+    msg += `• Semanas em alta: *${highs}/${total}* (${Math.round((highs / total) * 100)}%)\n`;
+    msg += `• Maior sequência de altas: *${longestStreak}* semanas\n`;
+    msg += `• Tendência: ${trend}\n`;
+    msg += `━━━━━━━━━━━━━━━━\n`;
+    msg += `_Fonte: CoinGecko_\n`;
+    msg += `⚠️ _Cripto é altamente volátil. Nunca invista mais do que pode perder._`;
+
+    return msg;
+  } catch (e) {
+    logger.error(`[market] analyzeCryptoForInvestment(${coinId}) error`, e);
+    return getCrypto(symbol);
+  }
+}
+
+// ─── Top Ações B3 ─────────────────────────────────────────────────────────────
+const TOP_B3_TICKERS = ["PETR4", "VALE3", "ITUB4", "BBDC4", "BBAS3", "WEGE3", "RENT3", "BOVA11", "GGBR4", "HAPV3"];
+
+export async function getTopB3Stocks(): Promise<string> {
+  try {
+    const token = config.market.brapiToken;
+    const tokenParam = token ? `?token=${token}` : "";
+    const tickers = TOP_B3_TICKERS.join(",");
+    const url = `https://brapi.dev/api/quote/${tickers}${tokenParam}`;
+    const data = await fetchJSON<BrapiResponse>(url);
+
+    if (!data.results?.length) {
+      return "⚠️ Não foi possível obter as cotações das principais ações agora.";
+    }
+
+    const sorted = [...data.results].sort(
+      (a, b) => b.regularMarketChangePercent - a.regularMarketChangePercent,
+    );
+
+    const medals = ["🥇", "🥈", "🥉"];
+    let msg = `🏆 *Top Ações B3 — Desempenho Hoje*\n━━━━━━━━━━━━━━━━\n`;
+
+    sorted.forEach((q, i) => {
+      const icon = q.regularMarketChangePercent >= 0 ? "📈" : "📉";
+      const pos = medals[i] ?? `${i + 1}°`;
+      const name = q.shortName ? ` _(${q.shortName.slice(0, 20)})_` : "";
+      msg += `${pos} *${q.symbol}*${name}\n`;
+      msg += `   R$${fmt(q.regularMarketPrice, 2)} ${icon} ${fmtPct(q.regularMarketChangePercent)}\n`;
+    });
+
+    msg += `━━━━━━━━━━━━━━━━\n`;
+    msg += `💡 Análise detalhada: _"analisar PETR4"_\n`;
+    msg += `⚠️ _Sugestão informativa — consulte um corretor certificado._`;
+
+    return msg;
+  } catch (e) {
+    logger.error("[market] getTopB3Stocks error", e);
+    return "⚠️ Não foi possível obter as cotações agora. Tente novamente em instantes.";
+  }
+}
+
+// ─── Top Criptomoedas ─────────────────────────────────────────────────────────
+export async function getTopCryptosReport(): Promise<string> {
+  try {
+    const coins = await getCoinGeckoMarkets();
+    if (!coins.length) return "⚠️ Não foi possível obter os dados de cripto agora.";
+
+    // Sort by 7-day performance (melhor indicador de momentum)
+    const sorted = [...coins]
+      .filter(c => c.price_change_percentage_7d_in_currency !== undefined)
+      .sort((a, b) => (b.price_change_percentage_7d_in_currency ?? 0) - (a.price_change_percentage_7d_in_currency ?? 0));
+
+    const medals = ["🥇", "🥈", "🥉"];
+    let msg = `🏆 *Top Criptomoedas — Semana*\n━━━━━━━━━━━━━━━━\n`;
+
+    sorted.slice(0, 8).forEach((c, i) => {
+      const pct24h = c.price_change_percentage_24h ?? 0;
+      const pct7d = c.price_change_percentage_7d_in_currency ?? 0;
+      const icon = pct7d >= 0 ? "📈" : "📉";
+      const pos = medals[i] ?? `${i + 1}°`;
+      const sym = c.symbol.toUpperCase();
+      msg += `${pos} *${sym}* _(${c.name})_\n`;
+      msg += `   R$${fmt(c.current_price, 2)} ${icon} 7d: ${fmtPct(pct7d)} · 24h: ${fmtPct(pct24h)}\n`;
+    });
+
+    msg += `━━━━━━━━━━━━━━━━\n`;
+    msg += `💡 Análise: _"analisar bitcoin"_ ou _"análise ethereum"_\n`;
+    msg += `⚠️ _Cripto é altamente volátil. Esta é uma sugestão informativa._`;
+
+    return msg;
+  } catch (e) {
+    logger.error("[market] getTopCryptosReport error", e);
+    return "⚠️ Não foi possível obter os dados de cripto agora.";
+  }
+}
+
+// ─── Menu de Investimentos ────────────────────────────────────────────────────
+export function getInvestmentMenu(): string {
+  return (
+    `💹 *INVESTIMENTOS — Como posso te ajudar?*\n` +
+    `━━━━━━━━━━━━━━━━\n\n` +
+    `*📈 Melhores Ações do Momento (B3)*\n` +
+    `→ Vejo quais ações estão em alta hoje com gráfico de tendência\n` +
+    `   _Digite: "melhores ações"_\n\n` +
+    `*🚀 Top Criptomoedas da Semana*\n` +
+    `→ Ranking das criptos com maior valorização nos últimos 7 dias\n` +
+    `   _Digite: "top criptos"_\n\n` +
+    `*🔍 Análise Individual*\n` +
+    `→ Mini-gráfico, tendência, semanas em alta/baixa dos últimos 3 meses\n` +
+    `   _Digite: "analisar PETR4"_ ou _"análise bitcoin"_\n\n` +
+    `*📊 Cotação Atual*\n` +
+    `→ Preço em tempo real de qualquer ativo\n` +
+    `   _Digite: "VALE3"_ · _"ethereum"_ · _"dólar"_\n\n` +
+    `━━━━━━━━━━━━━━━━\n` +
+    `⚠️ *Aviso importante:* As análises são geradas por IA com dados históricos e têm fins informativos *apenas*. Não constituem recomendação formal de investimento. Consulte um *corretor de valores certificado (CNPI)* antes de qualquer decisão.\n\n` +
+    `Você também pode pesquisar em:\n` +
+    `• *Status Invest* (statusinvest.com.br)\n` +
+    `• *Infomoney* (infomoney.com.br)\n` +
+    `• *Rico Investimentos* (rico.com.vc)\n` +
+    `━━━━━━━━━━━━━━━━`
+  );
+}
+
+// ─── Detecção de consultas de investimento ────────────────────────────────────
+export interface InvestmentQuery {
+  type:
+    | "investment_menu"
+    | "top_stocks"
+    | "top_cryptos"
+    | "stock_analysis"
+    | "crypto_analysis";
+  ticker?: string;
+  coinId?: string;
+  symbol?: string;
+  displayName?: string;
+}
+
+export function detectInvestmentQuery(text: string): InvestmentQuery | null {
+  const t = text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+
+  // Menu geral de investimentos
+  const isGeneralInvestment =
+    /\b(onde.*investir|melhor.*investimento|quero.*investir|devo.*investir|como.*investir|onde.*colocar.*dinheiro|boa.*compra|o que.*comprar.*agora|recomendacao.*acao|indicacao.*acao|vale.*investir|melhor.*compra|o que.*render|onde.*render|investimento.*seguro)\b/.test(t);
+
+  if (isGeneralInvestment) {
+    if (/\b(cripto|bitcoin|ethereum|btc|eth|blockchain|moeda digital|token)\b/.test(t)) {
+      return { type: "top_cryptos" };
+    }
+    if (/\b(acao|acoes|bolsa|b3|bovespa|papel|fii|tesouro)\b/.test(t)) {
+      return { type: "top_stocks" };
+    }
+    return { type: "investment_menu" };
+  }
+
+  // Top ações explícito
+  if (/\b(melhores.*acoes|top.*acoes|acoes.*alta|acoes.*momento|acoes.*recomend|quais.*acoes|melhores.*papeis)\b/.test(t)) {
+    return { type: "top_stocks" };
+  }
+
+  // Top criptos explícito
+  if (/\b(melhores.*cripto|top.*cripto|cripto.*alta|cripto.*momento|cripto.*recomend|quais.*cripto|melhores.*moedas)\b/.test(t)) {
+    return { type: "top_cryptos" };
+  }
+
+  // Análise específica de cripto
+  const analysisWords = /\b(analise|analisar|historico|tendencia|grafico|performance|como.*foi|como.*esta|subiu|caiu|investir|comprar|vender|vale.*pena|devo.*comprar)\b/;
+
+  for (const [key, info] of Object.entries(CRYPTO_MAP)) {
+    if (t.includes(key) && analysisWords.test(t)) {
+      return { type: "crypto_analysis", ...info };
+    }
+  }
+
+  // Análise específica de ação B3
+  const stockMatch = t.match(/\b([a-z]{4}[0-9]{1,2}[a-z]?)\b/);
+  if (stockMatch && analysisWords.test(t)) {
+    const ticker = stockMatch[1].toUpperCase();
+    const ignored = new Set(["IPCA", "IGPM", "IBOV", "TAXA", "META", "PELO", "PARA", "COMO", "ISSO"]);
+    if (!ignored.has(ticker)) {
+      return { type: "stock_analysis", ticker };
+    }
+  }
+
+  return null;
 }

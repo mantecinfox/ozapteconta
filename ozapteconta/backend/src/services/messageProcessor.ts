@@ -4,15 +4,15 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { config } from "../config";
 import { logger } from "../utils/logger";
-import { extractTransaction, extractTransactionFromAudio, analyzeNutrition, generateDietPlan, AIMessage } from "./aiService";
+import { extractTransaction, extractTransactionFromAudio, analyzeNutrition, generateDietPlan, generateInvestmentAdvice, AIMessage } from "./aiService";
 import { sendMessage, downloadMedia, formatCurrency, formatDate } from "./whatsappService";
 import { transcribeAudio } from "./transcriptionService";
 import { issueClientPortalAccess } from "./clientAccessService";
-import infinityPayService from "./infinityPayService";
-import { sendFinancialReportNow } from "./financialReportService";
-import { detectMarketQuery, executeMarketQuery, getMarketHelp } from "./marketDataService";
+import { detectMarketQuery, executeMarketQuery, getMarketHelp, detectInvestmentQuery, analyzeStockForInvestment, analyzeCryptoForInvestment, getTopB3Stocks, getTopCryptosReport, getInvestmentMenu, InvestmentQuery } from "./marketDataService";
 import { detectFipeQuery, queryFipe, getFipeHelp } from "./fipeService";
 import { resolveWhatsappIdentity } from "./whatsappIdentityService";
+import infinityPayService from "./infinityPayService";
+import { sendFinancialReportNow } from "./financialReportService";
 
 const ONBOARDING_TIMEOUT_MINUTES = 10;
 
@@ -1844,6 +1844,65 @@ export async function processText(phone: string, senderName: string | undefined,
       const fipeResult = await queryFipe(canonicalPhone, fipeQuery.query, fipeQuery.vehicleType);
       await sendMessage(canonicalPhone, fipeResult.message);
       return;
+    }
+
+    // ── Análise de Investimentos (IA + dados reais) ───────────────────────────
+    const investQuery = detectInvestmentQuery(text);
+    if (investQuery) {
+      if (isBasicPlan) {
+        await sendMessage(
+          canonicalPhone,
+          "🔒 Análise de Investimentos é um recurso do plano *Completo (R$ 9,90)*.\n\nAtualize seu plano para acessar análises de ações, criptomoedas e sugestões de investimento.",
+        );
+        return;
+      }
+
+      let investResponse = "";
+
+      switch (investQuery.type) {
+        case "investment_menu":
+          investResponse = getInvestmentMenu();
+          break;
+
+        case "top_stocks":
+          investResponse = await getTopB3Stocks();
+          break;
+
+        case "top_cryptos":
+          investResponse = await getTopCryptosReport();
+          break;
+
+        case "stock_analysis": {
+          const ticker = investQuery.ticker!;
+          // Busca dados reais primeiro
+          const rawData = await analyzeStockForInvestment(ticker);
+          // Enriquece com análise de IA usando os dados como contexto
+          const aiAnalysis = await generateInvestmentAdvice(text, rawData, history);
+          investResponse = rawData + (aiAnalysis ? "\n\n" + aiAnalysis : "");
+          break;
+        }
+
+        case "crypto_analysis": {
+          const rawData = await analyzeCryptoForInvestment(
+            investQuery.coinId!,
+            investQuery.displayName!,
+            investQuery.symbol!,
+          );
+          const aiAnalysis = await generateInvestmentAdvice(text, rawData, history);
+          investResponse = rawData + (aiAnalysis ? "\n\n" + aiAnalysis : "");
+          break;
+        }
+      }
+
+      if (investResponse) {
+        await saveContext(canonicalPhone, [
+          ...history,
+          { role: "user", content: text },
+          { role: "assistant", content: investResponse },
+        ]);
+        await sendMessage(canonicalPhone, investResponse);
+        return;
+      }
     }
 
     // ── Consulta de mercado financeiro (antes da IA) ──────────────────────────

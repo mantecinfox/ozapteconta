@@ -781,6 +781,98 @@ export async function generateDietPlan(text: string, history: AIMessage[] = []):
   logger.warn(`[AIService] Plano de dieta indisponível: ${String(lastError)}`);
   return null;
 }
+
+// ─── Análise de Investimentos via IA ─────────────────────────────────────────
+
+function buildInvestmentPrompt(marketData: string): string {
+  return `Você é um analista de mercado financeiro experiente, respondendo via WhatsApp em português brasileiro.
+
+DADOS DE MERCADO REAIS (gerados agora):
+${marketData}
+
+MISSÃO:
+Com base nos dados acima, gere uma análise de investimento inteligente, envolvente, honesta e útil para o cliente.
+
+ESTRUTURA DA ANÁLISE:
+
+🤖 *ANÁLISE — [Nome do Ativo]*
+━━━━━━━━━━━━━━━━
+[2-3 parágrafos de análise sólida com base nos dados reais fornecidos: contexto do ativo, o que explica a tendência, fatores técnicos relevantes]
+
+📊 *Momento atual:* [positivo / neutro / negativo] — [por quê em 1 frase]
+🎯 *Perfil indicado:* [qual perfil de investidor se adequa: conservador / moderado / arrojado]
+⚡ *Pontos de atenção:* [2-3 riscos ou oportunidades específicas baseadas nos dados]
+
+💡 *Perspectiva (baseada nos dados):*
+[Análise motivadora mas realista. Ex: "Com X% das semanas em alta e valorização de Y% em 3 meses, este ativo mostra momentum positivo. Pontos de entrada abaixo de R$... podem ser interessantes para investidores de médio prazo — porém a volatilidade recente exige..."]
+
+━━━━━━━━━━━━━━━━
+⚠️ *AVISO:* Esta análise é gerada por IA com fins informativos e não é recomendação formal de investimento. Rentabilidade passada não garante resultados futuros. Consulte um *corretor certificado (CNPI)* antes de decidir.
+Pesquise também em: *Status Invest*, *Infomoney* ou *Rico Investimentos*.
+━━━━━━━━━━━━━━━━
+
+PRINCÍPIOS:
+- Use os números reais do contexto fornecido
+- Seja empolgante sobre o potencial mas honesto sobre os riscos
+- Para cripto: ressalte SEMPRE o risco maior e a volatilidade extrema
+- Para ações B3: mencione setor, dividendos se relevante, posição no índice
+- Finalize sempre com o aviso legal
+- Não diga que é uma IA
+- Nunca faça previsão de preço específico futuro`;
+}
+
+export async function generateInvestmentAdvice(
+  userMessage: string,
+  marketData: string,
+  history: AIMessage[] = [],
+): Promise<string | null> {
+  const messages: AIMessage[] = [
+    { role: "system", content: buildInvestmentPrompt(marketData) },
+    ...history.slice(-4),
+    { role: "user", content: userMessage },
+  ];
+
+  const chain = await getProviderChain("text");
+  let lastError: unknown;
+
+  for (const provider of chain) {
+    if (provider.provider !== "OLLAMA" && !provider.apiKey) continue;
+    const startedAt = Date.now();
+    const attempt = chain.indexOf(provider) + 1;
+    try {
+      const providerResult = await callProvider(
+        provider.provider,
+        provider.apiKey || "",
+        normalizeModelForProvider(provider.provider, provider.model),
+        messages,
+        provider.apiUrl,
+      );
+      const content = providerResult.content.trim();
+      await writeAiUsageLog({
+        ts: new Date().toISOString(),
+        provider: provider.provider,
+        model: normalizeModelForProvider(provider.provider, provider.model),
+        channel: "text",
+        stage: "extract",
+        success: Boolean(content),
+        latencyMs: Date.now() - startedAt,
+        fallbackUsed: attempt > 1,
+        attempt,
+        promptTokens: providerResult.usage?.promptTokens,
+        completionTokens: providerResult.usage?.completionTokens,
+        totalTokens: providerResult.usage?.totalTokens,
+      });
+      if (content) return content;
+    } catch (err) {
+      lastError = err;
+      logger.warn(`[AIService] Análise de investimento com ${provider.provider} falhou: ${String(err)}`);
+    }
+  }
+
+  logger.warn(`[AIService] Análise de investimento indisponível: ${String(lastError)}`);
+  return null;
+}
+
 async function transcribeAudioWithProvider(
   provider: string,
   apiKey: string,
