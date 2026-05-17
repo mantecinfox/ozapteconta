@@ -77,7 +77,7 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
-function buildReportEmailHtml(params: {
+export function buildReportEmailHtml(params: {
   recipientName?: string | null;
   title: string;
   periodLabel: string;
