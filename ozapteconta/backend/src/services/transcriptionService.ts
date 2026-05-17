@@ -1,7 +1,6 @@
 import fs from "fs";
 import path from "path";
 import os from "os";
-import FormData from "form-data";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import ffmpeg from "fluent-ffmpeg";
 import { prisma } from "../config/prisma";
@@ -163,9 +162,14 @@ async function transcribeViaAbacusAudioModels(audioPath: string, language: strin
   const endpoint = `${baseUrl}/v1/chat/completions`;
 
   try {
+    const audioFormat = detectAudioFormatFromPath(audioPath);
+    if (audioFormat !== "mp3" && audioFormat !== "wav") {
+      logger.info(`[Transcription] ABACUS aceita apenas wav/mp3; áudio ${audioFormat} será transcrito por Whisper/API antes de ir para IA.`);
+      return null;
+    }
+
     const audioBuffer = await fs.promises.readFile(audioPath);
     const audioBase64 = audioBuffer.toString("base64");
-    const audioFormat = detectAudioFormatFromPath(audioPath);
 
     const modelChain = await getAbacusAudioModelChain();
 
@@ -300,11 +304,9 @@ async function transcribeViaWhisperApi(audioPath: string, language: string): Pro
 
   try {
     const startedAt = Date.now();
+    const audioBuffer = await fs.promises.readFile(audioPath);
     const formData = new FormData();
-    formData.append("file", fs.createReadStream(audioPath), {
-      filename: path.basename(audioPath),
-      contentType: "audio/ogg",
-    });
+    formData.append("file", new Blob([audioBuffer]), path.basename(audioPath));
     const whisperModel = provider.provider === "GROQ" ? "whisper-large-v3" : "whisper-1";
     formData.append("model", whisperModel);
     formData.append("language", language);
@@ -319,9 +321,8 @@ async function transcribeViaWhisperApi(audioPath: string, language: string): Pro
       method: "POST",
       headers: {
         Authorization: `Bearer ${provider.apiKey}`,
-        ...formData.getHeaders(),
       },
-      body: formData as any,
+      body: formData,
       signal: AbortSignal.timeout(60000),
     });
 
@@ -381,15 +382,15 @@ async function transcribeViaWhisperApi(audioPath: string, language: string): Pro
 // ─── Ponto de entrada principal ──────────────────────────────────────────────
 // Tenta: 1) ABACUS (cadeia de modelos de áudio) → 2) Whisper API (OpenAI/Groq) → 3) Whisper local
 export async function transcribeAudio(audioPath: string, language = "pt"): Promise<string | null> {
-  // 1) Cadeia de modelos de áudio na ABACUS
-  const abacusAudioResult = await transcribeViaAbacusAudioModels(audioPath, language);
-  if (abacusAudioResult) return abacusAudioResult;
-
-  // 2) Fallback para Whisper API (OpenAI/Groq)
+  // 1) Transcreve o áudio para texto via Whisper API (OpenAI/Groq)
   const apiResult = await transcribeViaWhisperApi(audioPath, language);
   if (apiResult) return apiResult;
 
-  // 3) Fallback: Whisper local (sem API key, sem Python, sem ffmpeg manual)
+  // 2) Se o áudio já vier em wav/mp3, ainda pode tentar ABACUS nativo como fallback
+  const abacusAudioResult = await transcribeViaAbacusAudioModels(audioPath, language);
+  if (abacusAudioResult) return abacusAudioResult;
+
+  // 3) Fallback local
   logger.info("[Transcription] ABACUS/Whisper API indisponíveis — usando Whisper local...");
   return transcribeLocal(audioPath, language);
 }

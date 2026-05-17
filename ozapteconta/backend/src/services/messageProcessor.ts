@@ -2112,22 +2112,33 @@ export async function processAudioBuffer(
   const allowedContexts: ("PESSOAL" | "COMERCIAL")[] =
     cp?.plan === "OFFICE" ? ["PESSOAL", "COMERCIAL"] : ["PESSOAL", "COMERCIAL"];
 
-  let extracted = await extractTransactionFromAudio(audioPath, history, allowedContexts);
-  let transcription = extracted?.transcription?.trim() || null;
+  let transcription = await transcribeAudio(audioPath);
+  let extracted = null;
 
-  if (!extracted) {
-    transcription = await transcribeAudio(audioPath);
-
-    if (!transcription) {
-      await sendMessage(canonicalPhone, "⚠️ Não consegui transcrever o áudio. Envie em texto.\n\nExemplo: *luz 150 dia 20*");
-      return;
-    }
-
+  if (transcription) {
     logger.info(`[Audio] Transcrição: "${transcription}"`);
-    extracted = await extractTransaction(transcription, history, allowedContexts, "audio");
+  } else {
+    extracted = await extractTransactionFromAudio(audioPath, history, allowedContexts);
+    transcription = extracted?.transcription?.trim() || null;
   }
 
   await prisma.audioMessage.update({ where: { id: audioRecord.id }, data: { transcription } });
+
+  if (!transcription && !extracted) {
+    await sendMessage(canonicalPhone, "⚠️ Não consegui transcrever o áudio. Envie em texto.\n\nExemplo: *luz 150 dia 20*");
+    return;
+  }
+
+  if (transcription && (isBMRQuery(transcription) || isChoosingBMRFromMenu(transcription, history))) {
+    const response = `🎤 _"${transcription}"_\n\n${formatBMRResponse(transcription)}`;
+    await saveContext(canonicalPhone, [...history, { role: "user", content: `[áudio] ${transcription}` }, { role: "assistant", content: response }]);
+    await sendMessage(canonicalPhone, response);
+    return;
+  }
+
+  if (!extracted) {
+    extracted = await extractTransaction(transcription!, history, allowedContexts, "audio");
+  }
 
   let response: string;
   if (transcription && isNutritionQuery(transcription)) {
@@ -2242,28 +2253,39 @@ export async function processAudio(
   const audioAllowedContexts: ("PESSOAL" | "COMERCIAL")[] =
     audioClientProfile?.plan === "OFFICE" ? ["PESSOAL", "COMERCIAL"] : ["PESSOAL", "COMERCIAL"];
 
-  let extracted = await extractTransactionFromAudio(audioPath, history, audioAllowedContexts);
-  let transcription = extracted?.transcription?.trim() || null;
+  let transcription = await transcribeAudio(audioPath);
+  let extracted = null;
 
-  if (!extracted) {
-    transcription = await transcribeAudio(audioPath);
-
-    if (!transcription) {
-      await sendMessage(
-        canonicalPhone,
-        "⚠️ Não consegui transcrever o áudio. Por favor, envie uma mensagem de texto.\n\nExemplo: *luz 150 dia 20*"
-      );
-      return;
-    }
-
-    extracted = await extractTransaction(transcription, history, audioAllowedContexts, "audio");
+  if (transcription) {
+    logger.info(`[Audio] Transcrição: "${transcription}"`);
+  } else {
+    extracted = await extractTransactionFromAudio(audioPath, history, audioAllowedContexts);
+    transcription = extracted?.transcription?.trim() || null;
   }
 
-  // Atualiza transcrição no registro
   await prisma.audioMessage.update({
     where: { id: audioRecord.id },
     data: { transcription },
   });
+
+  if (!transcription && !extracted) {
+    await sendMessage(
+      canonicalPhone,
+      "⚠️ Não consegui transcrever o áudio. Por favor, envie uma mensagem de texto.\n\nExemplo: *luz 150 dia 20*"
+    );
+    return;
+  }
+
+  if (transcription && (isBMRQuery(transcription) || isChoosingBMRFromMenu(transcription, history))) {
+    const response = `🎤 _"${transcription}"_\n\n${formatBMRResponse(transcription)}`;
+    await saveContext(canonicalPhone, [...history, { role: "user", content: `[áudio] ${transcription}` }, { role: "assistant", content: response }]);
+    await sendMessage(canonicalPhone, response);
+    return;
+  }
+
+  if (!extracted) {
+    extracted = await extractTransaction(transcription!, history, audioAllowedContexts, "audio");
+  }
 
   let response: string;
 

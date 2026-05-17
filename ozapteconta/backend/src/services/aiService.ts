@@ -556,18 +556,26 @@ async function callProvider(
 }
 
 // ─── Cadeia de provedores por fonte ─────────────────────────────────────────
-// Texto  → OLLAMA primeiro, ABACUS segundo, demais em seguida
-// Áudio  → ABACUS primeiro, OLLAMA segundo, demais em seguida
 async function getProviderChain(source: "text" | "audio" = "text") {
   const all = await prisma.aiProviderConfig.findMany({
     where: { enabled: true },
     orderBy: { id: "asc" },
   });
 
-  // Cadeia de fallback: Groq → Abacus → Gemini (para ambos audio e texto)
-  const priority = ["GROQ", "ABACUS", "GEMINI", "OPENAI", "GROK", "OLLAMA"];
+  const audioCapableProviders = new Set(["ABACUS", "GROQ", "OPENAI"]);
+  const candidates = source === "audio"
+    ? all.filter((provider) => audioCapableProviders.has(provider.provider))
+    : all;
 
-  return [...all].sort((a, b) => {
+  const priority = source === "audio"
+    ? ["ABACUS", "GROQ", "OPENAI"]
+    : ["GROQ", "ABACUS", "GEMINI", "OPENAI", "GROK", "OLLAMA"];
+
+  return [...candidates].sort((a, b) => {
+    const aDefault = source === "audio" ? a.isAudioDefault : a.isDefault;
+    const bDefault = source === "audio" ? b.isAudioDefault : b.isDefault;
+    if (aDefault !== bDefault) return aDefault ? -1 : 1;
+
     const ai = priority.indexOf(a.provider);
     const bi = priority.indexOf(b.provider);
     return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
