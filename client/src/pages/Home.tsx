@@ -32,40 +32,42 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-white text-black">
       {/* Header Sticky com Urgência */}
-      <header className="sticky top-0 z-50 bg-white text-gray-900 border-b-4 border-green-500 shadow-md">
-        <div className="container mx-auto px-3 py-2.5 sm:px-4 sm:py-3">
-          <div className="grid min-h-[3.75rem] grid-cols-[1fr_auto_1fr] items-center gap-x-2 sm:gap-x-3">
+      <header className="sticky top-0 z-50 overflow-visible bg-white text-gray-900 border-b-4 border-green-500 shadow-md">
+        <div className="container mx-auto overflow-visible px-3 py-2.5 sm:px-4 sm:py-3">
+          <div className="flex min-h-[3.25rem] items-center gap-2 sm:min-h-14 sm:gap-3">
             <a
               href="/"
-              className="flex h-14 w-14 shrink-0 items-center justify-center justify-self-start"
+              className="flex h-10 w-10 shrink-0 items-center justify-center sm:h-12 sm:w-12"
               aria-label="OZAPTECHAMA - início"
             >
               <img
-                src="/logo-icon.svg?v=2"
+                src="/logo-icon.svg?v=3"
                 alt=""
-                width={56}
-                height={56}
-                className="block h-14 w-14"
+                width={48}
+                height={48}
+                className="block h-10 w-10 sm:h-12 sm:w-12"
                 decoding="async"
               />
             </a>
 
-            <div className="justify-self-center px-1 text-center leading-tight sm:px-2">
-              <p className="whitespace-nowrap text-base font-extrabold tracking-tight text-gray-900 sm:text-lg md:text-xl">
+            <div className="min-w-0 flex-1 overflow-visible px-1 text-center leading-tight sm:px-2">
+              <p className="text-sm font-extrabold tracking-tight text-gray-900 sm:text-lg md:text-xl">
                 OZAPTECHAMA
               </p>
-              <p className="whitespace-nowrap text-[11px] font-semibold text-green-600 sm:text-xs md:text-sm">
+              <p className="text-[10px] font-semibold text-green-600 sm:text-xs md:text-sm">
                 Seu Assistente Financeiro
               </p>
             </div>
 
-            <div className="hidden justify-self-end md:flex md:items-center md:gap-3">
-              <span className="shrink-0 rounded-full border border-green-300 bg-green-100 px-3 py-1 text-xs font-bold text-green-700">
-                PIX OU CARTÃO
-              </span>
-              <Button className="shrink-0 bg-green-500 font-bold text-white hover:bg-green-600">
-                VER PLANOS
-              </Button>
+            <div className="flex w-10 shrink-0 items-center justify-end sm:w-12 md:w-auto md:gap-3">
+              <div className="hidden md:flex md:items-center md:gap-3">
+                <span className="shrink-0 rounded-full border border-green-300 bg-green-100 px-3 py-1 text-xs font-bold text-green-700">
+                  PIX OU CARTÃO
+                </span>
+                <Button className="shrink-0 bg-green-500 font-bold text-white hover:bg-green-600">
+                  VER PLANOS
+                </Button>
+              </div>
             </div>
           </div>
         </div>
