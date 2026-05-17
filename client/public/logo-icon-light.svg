@@ -1,0 +1,27 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="outerGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FFFFFF"/>
+      <stop offset="100%" style="stop-color:#F0FFF4"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Anel externo branco -->
+  <circle cx="50" cy="50" r="48" fill="url(#outerGrad)"/>
+
+  <!-- Círculo interno verde -->
+  <circle cx="50" cy="50" r="40" fill="#15803D"/>
+
+  <!-- Gráfico de barras branco -->
+  <rect x="26" y="58" width="8" height="16" rx="2" fill="white" opacity="0.8"/>
+  <rect x="38" y="50" width="8" height="24" rx="2" fill="white"/>
+  <rect x="50" y="42" width="8" height="32" rx="2" fill="white" opacity="0.8"/>
+
+  <!-- Seta diagonal subindo branca -->
+  <polyline points="44,36 66,26 66,42" fill="none" stroke="white" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+  <line x1="44" y1="56" x2="66" y2="26" stroke="white" stroke-width="5" stroke-linecap="round"/>
+
+  <!-- Checkmark pequeno no canto superior esquerdo -->
+  <circle cx="28" cy="30" r="10" fill="white" opacity="0.9"/>
+  <polyline points="23,30 27,34 34,25" fill="none" stroke="#15803D" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

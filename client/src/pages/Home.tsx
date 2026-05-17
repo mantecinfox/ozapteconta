@@ -34,17 +34,15 @@ export default function Home() {
       {/* Header Sticky com Urgência */}
       <header className="sticky top-0 z-50 bg-white text-gray-900 border-b-4 border-green-500 shadow-md">
         <div className="container mx-auto px-4 py-3 flex items-center justify-between">
-          {/* Logo e Texto Centralizados */}
-          <div className="flex-1 flex items-center justify-center">
-            <div className="flex flex-col items-center">
-              <img src="/logo-ozaptechama.svg" alt="OZAPTECHAMA Logo" className="h-16 w-auto" />
-              <div className="text-center mt-1 hidden sm:block">
-                <p className="text-xs font-semibold text-gray-700">OZAPTECHAMA</p>
-                <p className="text-xs text-green-600">Seu Assistente Financeiro</p>
-              </div>
+          {/* Logo ícone + Texto */}
+          <div className="flex items-center gap-3">
+            <img src="/logo-icon.svg" alt="OZAPTECHAMA" className="h-14 w-14 flex-shrink-0" />
+            <div>
+              <p className="font-extrabold text-xl text-gray-900 leading-tight">OZAPTECHAMA</p>
+              <p className="text-xs text-green-600 font-semibold">Seu Assistente Financeiro</p>
             </div>
           </div>
-          
+
           {/* Botões à Direita */}
           <div className="hidden md:flex gap-3 text-sm items-center">
             <span className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-bold border border-green-300">PIX OU CARTÃO</span>
@@ -607,8 +605,9 @@ export default function Home() {
         <div className="container mx-auto px-4">
           <div className="grid md:grid-cols-4 gap-8 mb-8">
             <div>
-              <div className="flex items-center gap-2 mb-3">
-                <img src="/logo-ozaptechama.svg" alt="OZAPTECHAMA" className="h-14 w-auto" />
+              <div className="flex items-center gap-3 mb-3">
+                <img src="/logo-icon-light.svg" alt="OZAPTECHAMA" className="h-14 w-14 flex-shrink-0" />
+                <p className="font-extrabold text-xl text-white leading-tight">OZAPTECHAMA</p>
               </div>
               <p className="text-sm text-gray-300">Seu assistente financeiro direto no WhatsApp.</p>
             </div>
