@@ -40,7 +40,7 @@ export default function Home() {
             aria-label="OZAPTECHAMA - início"
           >
             <img
-              src="/logo-icon.svg"
+              src="/logo-icon.svg?v=4"
               alt=""
               width={44}
               height={44}
@@ -598,18 +598,18 @@ export default function Home() {
             ✨ Plano Padrão R$ 4,99 • Completo R$ 9,99 • Pix ou cartão
           </p>
 
-          <div className="mt-12 grid md:grid-cols-3 gap-6 text-center">
-            <div>
+          <div className="mt-12 grid gap-6 text-center md:grid-cols-3">
+            <div className="px-2">
               <p className="text-4xl font-bold text-green-500">{activeUsers.toLocaleString()}</p>
-              <p className="text-sm">Usuários OZAPTECHAMA ativos</p>
+              <p className="text-pretty text-sm leading-snug">Usuários OZAPTECHAMA ativos</p>
             </div>
-            <div>
+            <div className="px-2">
               <p className="text-4xl font-bold text-green-500">R$ {totalSavings.toLocaleString('pt-BR')}</p>
-              <p className="text-sm">Em gastos organizados</p>
+              <p className="text-pretty text-sm leading-snug">Em gastos organizados</p>
             </div>
-            <div>
+            <div className="px-2">
               <p className="text-4xl font-bold text-red-500">{spotsLeft}</p>
-              <p className="text-sm">Ativações promocionais</p>
+              <p className="text-pretty text-sm leading-snug">Ativações promocionais</p>
             </div>
           </div>
         </div>
