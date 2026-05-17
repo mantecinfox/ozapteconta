@@ -36,10 +36,6 @@ export default function Home() {
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <img src="/logo-ozaptechama.svg" alt="OZAPTECHAMA Logo" className="h-20 w-auto" />
-            <div className="hidden sm:block">
-              <span className="font-bold text-lg text-gray-900">OZAPTECHAMA</span>
-              <p className="text-xs text-green-600 font-semibold">Seu Assistente Financeiro</p>
-            </div>
           </div>
           <div className="hidden md:flex gap-4 text-sm items-center">
             <span className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-bold border border-green-300">PIX OU CARTÃO</span>
