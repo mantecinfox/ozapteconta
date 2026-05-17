@@ -34,13 +34,9 @@ export default function Home() {
       {/* Header Sticky com Urgência */}
       <header className="sticky top-0 z-50 bg-white text-gray-900 border-b-4 border-green-500 shadow-md">
         <div className="container mx-auto px-4 py-3 flex items-center justify-between">
-          {/* Logo ícone + Texto */}
-          <div className="flex items-center gap-3">
+          {/* Logo ícone */}
+          <div className="flex items-center">
             <img src="/logo-icon.svg" alt="OZAPTECHAMA" className="h-14 w-14 flex-shrink-0" />
-            <div>
-              <p className="font-extrabold text-xl text-gray-900 leading-tight">OZAPTECHAMA</p>
-              <p className="text-xs text-green-600 font-semibold">Seu Assistente Financeiro</p>
-            </div>
           </div>
 
           {/* Botões à Direita */}
