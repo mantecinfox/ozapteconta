@@ -213,37 +213,101 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Seção de Problemas - Gatilho de Dor */}
-      <section className="bg-white py-16 md:py-24">
+      {/* Antes x Depois — transformação */}
+      <section className="bg-gradient-to-b from-white to-gray-50 py-16 md:py-24">
         <div className="container mx-auto px-4">
-          <h2 className="text-4xl md:text-5xl font-bold text-center mb-12">
-            Você se encaixa em um desses? 👇
-          </h2>
+          <div className="mx-auto mb-12 max-w-3xl text-center">
+            <span className="mb-4 inline-block rounded-full bg-blue-900 px-4 py-1.5 text-sm font-bold text-white">
+              SUA ROTINA PODE MUDAR HOJE
+            </span>
+            <h2 className="text-4xl font-bold leading-tight md:text-5xl">
+              O que muda quando você tem um assistente completo no WhatsApp?
+            </h2>
+            <p className="mt-4 text-lg text-gray-600">
+              Finanças, nutrição, comercial e mercado financeiro — tudo no mesmo lugar, sem app novo para instalar.
+            </p>
+          </div>
 
-          <div className="grid md:grid-cols-2 gap-8">
-            <div className="bg-red-50 border-2 border-red-300 p-8 rounded-lg">
-              <div className="text-5xl mb-4">😰</div>
-              <h3 className="text-2xl font-bold text-red-900 mb-4">ANTES - Sem OZAPTECHAMA</h3>
-              <ul className="space-y-3 text-red-800">
-                <li>❌ Não sabe onde o dinheiro vai</li>
-                <li>❌ Dívidas acumuladas</li>
-                <li>❌ Preocupação constante</li>
-                <li>❌ Sem apoio em finanças, nutrição e comércio</li>
-                <li>❌ Dinheiro nunca sobra</li>
+          <div className="mx-auto grid max-w-5xl gap-6 md:grid-cols-2 md:gap-8">
+            <div className="relative overflow-hidden rounded-2xl border-2 border-red-200 bg-red-50/80 p-8 shadow-lg">
+              <div className="absolute right-0 top-0 rounded-bl-2xl bg-red-200 px-4 py-1 text-xs font-bold uppercase tracking-wide text-red-900">
+                Sem assistente
+              </div>
+              <div className="mb-5 text-5xl">😰</div>
+              <h3 className="text-2xl font-bold text-red-900">ANTES — Sem OZAPTECHAMA</h3>
+              <p className="mb-6 mt-2 text-red-800/90">
+                Você resolve tudo sozinho, em vários apps, sem resposta na hora.
+              </p>
+              <ul className="space-y-4">
+                <li className="flex gap-3 text-red-900">
+                  <span className="shrink-0 text-lg" aria-hidden>❌</span>
+                  <span><strong className="font-semibold">Finanças:</strong> dinheiro entra e some, dívidas aumentam e não há metas claras.</span>
+                </li>
+                <li className="flex gap-3 text-red-900">
+                  <span className="shrink-0 text-lg" aria-hidden>❌</span>
+                  <span><strong className="font-semibold">Nutrição:</strong> alimentação no improviso, sem orientação prática no dia a dia.</span>
+                </li>
+                <li className="flex gap-3 text-red-900">
+                  <span className="shrink-0 text-lg" aria-hidden>❌</span>
+                  <span><strong className="font-semibold">Comercial:</strong> vendas e negócio sem apoio rápido para precificar e decidir.</span>
+                </li>
+                <li className="flex gap-3 text-red-900">
+                  <span className="shrink-0 text-lg" aria-hidden>❌</span>
+                  <span><strong className="font-semibold">Mercado:</strong> FIPE, cotações e cripto em sites diferentes — ou nem consulta.</span>
+                </li>
+                <li className="flex gap-3 text-red-900">
+                  <span className="shrink-0 text-lg" aria-hidden>❌</span>
+                  <span><strong className="font-semibold">Resultado:</strong> estresse, decisões no “achismo” e sensação de estar sempre correndo atrás.</span>
+                </li>
               </ul>
             </div>
 
-            <div className="bg-green-50 border-2 border-green-500 p-8 rounded-lg">
-              <div className="text-5xl mb-4">🎉</div>
-              <h3 className="text-2xl font-bold text-green-900 mb-4">DEPOIS - Com OZAPTECHAMA</h3>
-              <ul className="space-y-3 text-green-800">
-                <li>✅ Visibilidade total de gastos</li>
-                <li>✅ Dívidas pagas</li>
-                <li>✅ Paz de espírito</li>
-                <li>✅ Finanças, nutrição e comercial organizados</li>
-                <li>✅ Decisões mais claras em várias áreas</li>
+            <div className="relative overflow-hidden rounded-2xl border-2 border-green-500 bg-green-50 p-8 shadow-xl ring-4 ring-green-500/20">
+              <div className="absolute right-0 top-0 rounded-bl-2xl bg-green-500 px-4 py-1 text-xs font-bold uppercase tracking-wide text-black">
+                Com OZAPTECHAMA
+              </div>
+              <div className="mb-5 text-5xl">🎉</div>
+              <h3 className="text-2xl font-bold text-green-900">DEPOIS — Com OZAPTECHAMA</h3>
+              <p className="mb-6 mt-2 text-green-800">
+                Um assistente inteligente no WhatsApp, pronto quando você precisar.
+              </p>
+              <ul className="space-y-4">
+                <li className="flex gap-3 text-green-900">
+                  <span className="shrink-0 text-lg" aria-hidden>✅</span>
+                  <span><strong className="font-semibold">Finanças:</strong> ganhos, gastos, metas e alertas organizados em conversas simples.</span>
+                </li>
+                <li className="flex gap-3 text-green-900">
+                  <span className="shrink-0 text-lg" aria-hidden>✅</span>
+                  <span><strong className="font-semibold">Nutrição:</strong> orientação e apoio alimentar personalizado, sem sair do WhatsApp.</span>
+                </li>
+                <li className="flex gap-3 text-green-900">
+                  <span className="shrink-0 text-lg" aria-hidden>✅</span>
+                  <span><strong className="font-semibold">Comercial:</strong> ajuda para vendas, negócios e decisões que impactam o faturamento.</span>
+                </li>
+                <li className="flex gap-3 text-green-900">
+                  <span className="shrink-0 text-lg" aria-hidden>✅</span>
+                  <span><strong className="font-semibold">Mercado:</strong> FIPE, mercado financeiro e criptomoedas no Plano Completo.</span>
+                </li>
+                <li className="flex gap-3 text-green-900">
+                  <span className="shrink-0 text-lg" aria-hidden>✅</span>
+                  <span><strong className="font-semibold">Resultado:</strong> mais clareza, menos ansiedade e decisões seguras em várias áreas da vida.</span>
+                </li>
               </ul>
+              <p className="mt-6 rounded-xl bg-green-500/20 px-4 py-3 text-center text-sm font-bold text-green-900">
+                A partir de R$ 4,99/mês • Pix ou cartão • Ativação rápida
+              </p>
             </div>
+          </div>
+
+          <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
+            <a href={whatsappLink} target="_blank" rel="noreferrer">
+              <Button size="lg" className="h-14 bg-green-500 px-8 text-lg font-bold text-black hover:bg-green-600">
+                QUERO ESSA TRANSFORMAÇÃO <ArrowRight className="ml-2 h-5 w-5" />
+              </Button>
+            </a>
+            <a href="#planos" className="text-sm font-bold text-blue-900 underline-offset-4 hover:underline">
+              Comparar planos Padrão e Completo
+            </a>
           </div>
         </div>
       </section>
