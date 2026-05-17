@@ -33,28 +33,37 @@ export default function Home() {
     <div className="min-h-screen bg-white text-black">
       {/* Header Sticky com Urgência */}
       <header className="sticky top-0 z-50 bg-white text-gray-900 border-b-4 border-green-500 shadow-md">
-        <div className="container mx-auto px-4 py-3">
-          <div className="relative flex min-h-14 items-center">
-            <a href="/" className="relative z-10 flex shrink-0 items-center" aria-label="OZAPTECHAMA - início">
-              <img src="/logo-icon.svg" alt="" className="h-14 w-14" />
+        <div className="container mx-auto px-3 py-2.5 sm:px-4 sm:py-3">
+          <div className="grid min-h-[3.75rem] grid-cols-[1fr_auto_1fr] items-center gap-x-2 sm:gap-x-3">
+            <a
+              href="/"
+              className="flex h-14 w-14 shrink-0 items-center justify-center justify-self-start"
+              aria-label="OZAPTECHAMA - início"
+            >
+              <img
+                src="/logo-icon.svg?v=2"
+                alt=""
+                width={56}
+                height={56}
+                className="block h-14 w-14"
+                decoding="async"
+              />
             </a>
 
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-16 sm:px-24 md:px-56">
-              <div className="text-center">
-                <p className="text-lg font-extrabold leading-tight tracking-tight text-gray-900 sm:text-xl">
-                  OZAPTECHAMA
-                </p>
-                <p className="text-xs font-semibold text-green-600 sm:text-sm">
-                  Seu Assistente Financeiro
-                </p>
-              </div>
+            <div className="justify-self-center px-1 text-center leading-tight sm:px-2">
+              <p className="whitespace-nowrap text-base font-extrabold tracking-tight text-gray-900 sm:text-lg md:text-xl">
+                OZAPTECHAMA
+              </p>
+              <p className="whitespace-nowrap text-[11px] font-semibold text-green-600 sm:text-xs md:text-sm">
+                Seu Assistente Financeiro
+              </p>
             </div>
 
-            <div className="relative z-10 ml-auto hidden items-center gap-3 text-sm md:flex">
-              <span className="rounded-full border border-green-300 bg-green-100 px-3 py-1 text-xs font-bold text-green-700">
+            <div className="hidden justify-self-end md:flex md:items-center md:gap-3">
+              <span className="shrink-0 rounded-full border border-green-300 bg-green-100 px-3 py-1 text-xs font-bold text-green-700">
                 PIX OU CARTÃO
               </span>
-              <Button className="bg-green-500 font-bold text-white hover:bg-green-600">
+              <Button className="shrink-0 bg-green-500 font-bold text-white hover:bg-green-600">
                 VER PLANOS
               </Button>
             </div>
