@@ -4,7 +4,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { config } from "../config";
 import { logger } from "../utils/logger";
-import { extractTransaction, extractTransactionFromAudio, analyzeNutrition, generateDietPlan, generateInvestmentAdvice, AIMessage } from "./aiService";
+import { extractTransaction, extractTransactionFromAudio, analyzeNutrition, generateDietPlan, generateInvestmentAdvice, generateGeneralResponse, AIMessage } from "./aiService";
 import { sendMessage, downloadMedia, formatCurrency, formatDate } from "./whatsappService";
 import { transcribeAudio } from "./transcriptionService";
 import { issueClientPortalAccess } from "./clientAccessService";
@@ -980,7 +980,7 @@ async function findKnowledgeAnswer(text: string): Promise<string | null> {
 function isNutritionQuery(text: string): boolean {
   const normalized = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
-  const nutritionIntent = /caloria|kcal|proteina|carbo|gordura|fibra|saudavel|engorda|emagrece|dieta|indice glicemico|sodio|colesterol|vitamina|mineral|porcao|quantidade|pode comer|deve comer|faz bem|faz mal|refeicao|alimento|alimentacao|comida|lanche|janta|jantar|cafe da manha|cafe da tarde|ceia|quantas vezes|quanto tempo posso comer|tmb|metabolismo|imc|indice de massa|taxa metabolica|tdee|gasto calorico|calorias.*dia|proteina.*dia|quanto.*proteina|deficit calorico|superavit|bulking|cutting|hipertrofia|musculacao|calistenia|crossfit|treino.*comer|comer.*treino|pre.*treino|pos.*treino/;
+  const nutritionIntent = /caloria|kcal|proteina|carbo|gordura|fibra|saudavel|engorda|emagrece|dieta|indice glicemico|sodio|colesterol|vitamina|mineral|porcao|quantidade|pode comer|deve comer|faz bem|faz mal|refeicao|alimento|alimentacao|comida|lanche|janta|jantar|cafe da manha|cafe da tarde|ceia|quantas vezes|quanto tempo posso comer|tmb|metabolismo|metabolismo basal|taxa basal|taxa metabolica|taxa metab|imc|indice de massa|tdee|gasto calorico|calorias.*dia|proteina.*dia|quanto.*proteina|deficit calorico|superavit|bulking|cutting|hipertrofia|musculacao|calistenia|crossfit|treino.*comer|comer.*treino|pre.*treino|pos.*treino/;
   const foodTerms = /arroz|feijao|frango|ovo|banana|maca|pao|queijo|leite|carne|peixe|batata|mandioca|salada|alface|tomate|abacate|aveia|iogurte|whey|way|suplemento|pizza|hamburguer|hamburger|sushi|refrigerante|bolo|chocolate|biscoito|bolacha|macarrao|pastel|coxinha|acai|suco|cafe|marmita|lanche|cottage|granola|tapioca|inhame|quinoa|brocolis|espinafre|atum|salmao|tilapia|peito.*frango|clara.*ovo/;
 
   if (nutritionIntent.test(normalized)) return true;
@@ -1284,7 +1284,7 @@ function getNutritionMenu(): string {
 
 // ─── Mensagens de Aguarde ─────────────────────────────────────────────────────
 
-type LoadingType = "investment_data" | "investment_ai" | "diet_plan" | "nutrition_ai" | "market_data";
+type LoadingType = "investment_data" | "investment_ai" | "diet_plan" | "nutrition_ai" | "market_data" | "general_ai";
 
 const LOADING_MESSAGES: Record<LoadingType, string[]> = {
   investment_data: [
@@ -1314,6 +1314,11 @@ const LOADING_MESSAGES: Record<LoadingType, string[]> = {
     `💹 *Buscando cotações em tempo real...*\n_Conectando ao Banco Central e bolsas. Aguarde!_ ⏳`,
     `📡 *Consultando o mercado...*\n_Buscando os dados mais recentes. Um instante!_ 💰`,
     `🌐 *Atualizando dados financeiros...*\n_Conectando às fontes de mercado. Já já!_ 📊`,
+  ],
+  general_ai: [
+    `🤔 *Deixa eu pensar...*\n_Nossa IA está processando sua mensagem. Um segundo!_ ⏳`,
+    `💬 *Entendendo sua pergunta...*\n_Consultando nossa inteligência artificial. Já já!_ 🤖`,
+    `🧠 *Analisando...*\n_Preparando a melhor resposta para você. Aguarde!_ ⏳`,
   ],
 };
 
@@ -2033,8 +2038,10 @@ export async function processText(phone: string, senderName: string | undefined,
         if (knowledgeAnswer) {
           response = knowledgeAnswer;
         } else {
-          // Fallback simples e direto
+          // IA generalista — responde qualquer pergunta contextualmente
+          await sendLoadingMessage(canonicalPhone, "general_ai");
           response =
+            (await generateGeneralResponse(text, history)) ??
             `❓ Não entendi o que você quer fazer.\n\n` +
             `Posso te ajudar com:\n` +
             `• 💰 Registrar contas a pagar ou receber\n` +

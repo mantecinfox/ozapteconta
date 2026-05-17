@@ -1313,6 +1313,77 @@ export async function extractTransaction(
   }
 }
 
+// ─── Resposta Geral via IA (fallback inteligente) ────────────────────────────
+export async function generateGeneralResponse(
+  userMessage: string,
+  history: AIMessage[] = [],
+): Promise<string | null> {
+  const systemPrompt =
+    `Você é o *OZapTeConta*, um assistente financeiro e de saúde via WhatsApp. ` +
+    `Suas capacidades:\n` +
+    `• 💰 Registrar contas a pagar/receber: _"paguei 120 de mercado"_, _"recebi 500 de salário"_\n` +
+    `• 📊 Resumos financeiros: _"resumo do mês"_, _"ver contas de hoje"_\n` +
+    `• 🧮 Taxa Basal (TMB), IMC e metas calóricas\n` +
+    `• 🥗 Plano alimentar personalizado e análise nutricional de alimentos\n` +
+    `• 📈 Análise de ações da B3 e criptomoedas com dados reais\n` +
+    `• 💹 Cotações: dólar, euro, Bitcoin, Selic, IPCA\n` +
+    `• 🚗 Tabela FIPE de veículos\n\n` +
+    `REGRAS:\n` +
+    `1. Responda à pergunta do usuário de forma ÚTIL e CONTEXTUAL — nunca com mensagem genérica\n` +
+    `2. Se for algo que você faz, explique como usar e dê um exemplo prático\n` +
+    `3. Se for pergunta de conhecimento geral (saúde, nutrição, finanças, etc.), responda com informações precisas\n` +
+    `4. Use formatação WhatsApp: *negrito*, _itálico_\n` +
+    `5. Seja conciso: máximo 250 palavras\n` +
+    `6. Responda em português brasileiro informal e amigável\n` +
+    `7. NUNCA peça para o usuário formatar a mensagem de outra forma como resposta inicial — primeiro tente entender e ajudar`;
+
+  const messages: AIMessage[] = [
+    { role: "system", content: systemPrompt },
+    ...history.slice(-6),
+    { role: "user", content: userMessage },
+  ];
+
+  const chain = await getProviderChain("text");
+  let lastError: unknown;
+
+  for (const provider of chain) {
+    if (provider.provider !== "OLLAMA" && !provider.apiKey) continue;
+    const startedAt = Date.now();
+    const attempt = chain.indexOf(provider) + 1;
+    try {
+      const providerResult = await callProvider(
+        provider.provider,
+        provider.apiKey || "",
+        normalizeModelForProvider(provider.provider, provider.model),
+        messages,
+        provider.apiUrl,
+      );
+      const content = providerResult.content.trim();
+      await writeAiUsageLog({
+        ts: new Date().toISOString(),
+        provider: provider.provider,
+        model: normalizeModelForProvider(provider.provider, provider.model),
+        channel: "text",
+        stage: "general",
+        success: Boolean(content),
+        latencyMs: Date.now() - startedAt,
+        fallbackUsed: attempt > 1,
+        attempt,
+        promptTokens: providerResult.usage?.promptTokens,
+        completionTokens: providerResult.usage?.completionTokens,
+        totalTokens: providerResult.usage?.totalTokens,
+      });
+      if (content) return content;
+    } catch (err) {
+      lastError = err;
+      logger.warn(`[AIService] Resposta geral com ${provider.provider} falhou: ${String(err)}`);
+    }
+  }
+
+  logger.warn(`[AIService] Resposta geral indisponível: ${String(lastError)}`);
+  return null;
+}
+
 // ─── Teste de conexão com provedor ───────────────────────────────────────────
 export async function testProvider(
   provider: string,

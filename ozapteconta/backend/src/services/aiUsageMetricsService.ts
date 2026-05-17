@@ -10,7 +10,7 @@ export interface AiUsageLogEntry {
   provider: string;
   model: string;
   channel: AiUsageChannel;
-  stage: "extract" | "transcribe";
+  stage: "extract" | "transcribe" | "general";
   success: boolean;
   latencyMs: number;
   fallbackUsed: boolean;
