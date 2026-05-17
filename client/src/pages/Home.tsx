@@ -547,12 +547,17 @@ export default function Home() {
             Segurança que Você Confia
           </h2>
 
-          <div className="grid md:grid-cols-2 gap-12 items-center">
-            <div>
-              <img 
-                src="https://d2xsxph8kpxj0f.cloudfront.net/310419663028484296/azDT7U6LLduZEjhZgggaQx/trust-security-zap-NMXCZtDYPWufMQQFN5xB.webp"
-                alt="Segurança"
-                className="w-full rounded-lg"
+          <div className="grid items-center gap-12 md:grid-cols-2">
+            <div className="relative">
+              <div className="absolute -inset-2 rounded-2xl bg-gradient-to-br from-green-400/30 to-blue-600/20 blur-xl" aria-hidden />
+              <img
+                src="/images/seguranca-confianca.svg"
+                alt="Proteção de dados no WhatsApp: escudo, criptografia e privacidade no OZAPTECHAMA"
+                width={640}
+                height={520}
+                className="relative w-full rounded-2xl border-2 border-green-500/40 shadow-xl"
+                loading="lazy"
+                decoding="async"
               />
             </div>
 
