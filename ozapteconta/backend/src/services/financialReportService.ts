@@ -68,70 +68,244 @@ function truncate(text: string, max: number): string {
   return `${value.slice(0, max - 1)}…`;
 }
 
+function escapeHtml(value: string): string {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function buildReportEmailHtml(params: {
   recipientName?: string | null;
   title: string;
-  result: string;
   periodLabel: string;
+  totalToPay: number;
+  totalToReceive: number;
+  finalBalance: number;
+  transactionCount?: number;
+  fileName?: string;
 }): string {
-  const name = (params.recipientName || "").trim().split(" ")[0] || "";
-  const greeting = name ? `Olá, ${name}!` : "Olá!";
+  const firstName = (params.recipientName || "").trim().split(" ")[0] || "";
+  const greeting = firstName ? `Olá, ${escapeHtml(firstName)}!` : "Olá!";
+  const isPositive = params.finalBalance >= 0;
+  const balanceColor = isPositive ? "#1f7a4d" : "#b93a32";
+  const balanceLabel = isPositive ? "Saldo positivo" : "Saldo negativo";
+  const balanceArrow = isPositive ? "▲" : "▼";
 
-  return `
-<!doctype html>
+  const totalToPay = formatCurrency(params.totalToPay || 0);
+  const totalToReceive = formatCurrency(params.totalToReceive || 0);
+  const finalBalance = formatCurrency(params.finalBalance || 0);
+  const txCount = typeof params.transactionCount === "number" ? params.transactionCount : null;
+  const title = escapeHtml(params.title);
+  const periodLabel = escapeHtml(params.periodLabel);
+  const safeFileName = params.fileName ? escapeHtml(params.fileName) : "";
+  const panelUrl = config.frontendUrl;
+
+  const preheader = `${params.periodLabel} • Resultado final: ${finalBalance}`;
+
+  return `<!doctype html>
 <html lang="pt-BR">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${params.title}</title>
+    <meta name="x-apple-disable-message-reformatting" />
+    <meta name="color-scheme" content="light" />
+    <meta name="supported-color-schemes" content="light" />
+    <title>${title}</title>
+    <!--[if mso]>
+      <style type="text/css">body,table,td,div,p,a{font-family:Arial,Helvetica,sans-serif !important;}</style>
+    <![endif]-->
   </head>
-  <body style="margin:0;padding:0;background:#f3f6fb;font-family:Segoe UI,Arial,sans-serif;color:#0f172a;">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f3f6fb;padding:24px 12px;">
+  <body style="margin:0;padding:0;background:#eef2f8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0f172a;-webkit-font-smoothing:antialiased;">
+    <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#eef2f8;opacity:0;">${escapeHtml(preheader)}</div>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#eef2f8;padding:32px 12px;">
       <tr>
         <td align="center">
-          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #dbe5f2;">
-            <tr>
-              <td style="padding:24px 28px;background:linear-gradient(135deg,#0b1220 0%,#12324a 55%,#1e3a8a 100%);color:#ffffff;">
-                <div style="font-size:24px;font-weight:700;letter-spacing:.2px;">ozapteconta</div>
-                <div style="margin-top:8px;font-size:14px;opacity:.9;">Relatorio financeiro com visual profissional</div>
-              </td>
-            </tr>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:640px;background:#ffffff;border-radius:18px;overflow:hidden;border:1px solid #d9e2ee;box-shadow:0 12px 32px rgba(11,18,32,.06);">
 
+            <!-- Header -->
             <tr>
-              <td style="padding:28px;">
-                <p style="margin:0 0 12px 0;font-size:16px;line-height:1.5;">${greeting}</p>
-                <p style="margin:0 0 18px 0;font-size:14px;line-height:1.6;color:#334155;">
-                  Seu <strong>${params.periodLabel}</strong> foi gerado com sucesso e segue em anexo neste e-mail.
-                </p>
-
-                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 20px 0;background:#f8fbff;border:1px solid #d7e6fb;border-radius:12px;">
+              <td style="padding:0;background:#0b1220;background:linear-gradient(135deg,#0b1220 0%,#12324a 55%,#1d4ed8 100%);color:#ffffff;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                   <tr>
-                    <td style="padding:16px 18px;">
-                      <div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.6px;">Resultado final</div>
-                      <div style="margin-top:6px;font-size:24px;font-weight:700;color:#0f172a;">${params.result}</div>
+                    <td style="padding:28px 32px 24px 32px;">
+                      <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                        <tr>
+                          <td valign="middle" style="padding-right:12px;">
+                            <div style="width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#60a5fa,#22d3ee);text-align:center;line-height:40px;font-size:20px;font-weight:800;color:#0b1220;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;">oz</div>
+                          </td>
+                          <td valign="middle">
+                            <div style="font-size:22px;font-weight:800;letter-spacing:.2px;line-height:1;">ozapteconta</div>
+                            <div style="margin-top:4px;font-size:12px;opacity:.78;letter-spacing:.3px;">Inteligência financeira no WhatsApp</div>
+                          </td>
+                        </tr>
+                      </table>
+                      <div style="margin-top:22px;display:inline-block;padding:6px 12px;border-radius:999px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:#dbeafe;">
+                        ${periodLabel}
+                      </div>
+                      <div style="margin-top:14px;font-size:22px;font-weight:700;line-height:1.25;color:#ffffff;">${title}</div>
                     </td>
                   </tr>
                 </table>
-
-                <p style="margin:0 0 20px 0;font-size:13px;line-height:1.6;color:#475569;">
-                  Dica: para manter um acompanhamento mais preciso, revise periodicamente suas contas no painel.
-                </p>
-
-                <a href="${config.frontendUrl}" style="display:inline-block;background:#1d4ed8;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:10px;font-size:13px;font-weight:600;">
-                  Acessar painel
-                </a>
               </td>
             </tr>
 
+            <!-- Greeting -->
             <tr>
-              <td style="padding:16px 28px;background:#f8fafc;border-top:1px solid #e2e8f0;">
-                <p style="margin:0;font-size:12px;color:#64748b;line-height:1.6;">
-                  Este e-mail foi enviado automaticamente pelo ozapteconta.<br/>
-                  Se tiver qualquer dúvida, responda esta mensagem.
+              <td style="padding:28px 32px 8px 32px;">
+                <p style="margin:0 0 8px 0;font-size:18px;font-weight:600;color:#0f172a;line-height:1.4;">${greeting}</p>
+                <p style="margin:0;font-size:14px;line-height:1.65;color:#475569;">
+                  Seu relatório financeiro está pronto. Preparamos um resumo executivo abaixo
+                  e anexamos o documento completo em PDF para você consultar quando quiser.
                 </p>
               </td>
             </tr>
+
+            <!-- Hero balance card -->
+            <tr>
+              <td style="padding:20px 32px 8px 32px;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#0b1220;background:linear-gradient(135deg,#0f172a 0%,#12324a 100%);border-radius:16px;">
+                  <tr>
+                    <td style="padding:22px 24px;">
+                      <div style="font-size:11px;font-weight:600;letter-spacing:1.4px;text-transform:uppercase;color:#93c5fd;">Resultado final do período</div>
+                      <div style="margin-top:10px;font-size:34px;font-weight:800;color:#ffffff;line-height:1.1;letter-spacing:-.5px;">${finalBalance}</div>
+                      <div style="margin-top:10px;">
+                        <span style="display:inline-block;padding:5px 10px;border-radius:999px;background:${isPositive ? "rgba(34,197,94,.18)" : "rgba(239,68,68,.18)"};color:${isPositive ? "#86efac" : "#fca5a5"};font-size:12px;font-weight:600;">
+                          ${balanceArrow} ${balanceLabel}
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- KPI cards -->
+            <tr>
+              <td style="padding:16px 24px 8px 24px;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                  <tr>
+                    <td width="50%" valign="top" style="padding:8px;">
+                      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#fff5f3;border:1px solid #fbd5cd;border-radius:14px;">
+                        <tr>
+                          <td style="padding:16px 18px;">
+                            <div style="font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#b93a32;">A pagar</div>
+                            <div style="margin-top:8px;font-size:20px;font-weight:800;color:#7f1d1d;line-height:1.2;">${totalToPay}</div>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                    <td width="50%" valign="top" style="padding:8px;">
+                      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#ecfdf5;border:1px solid #bbf7d0;border-radius:14px;">
+                        <tr>
+                          <td style="padding:16px 18px;">
+                            <div style="font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#1f7a4d;">A receber</div>
+                            <div style="margin-top:8px;font-size:20px;font-weight:800;color:#065f46;line-height:1.2;">${totalToReceive}</div>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            ${txCount !== null ? `
+            <tr>
+              <td style="padding:0 32px 4px 32px;">
+                <div style="font-size:12px;color:#64748b;line-height:1.6;">
+                  <strong style="color:#0f172a;">${txCount}</strong> ${txCount === 1 ? "lançamento contabilizado" : "lançamentos contabilizados"} neste período.
+                </div>
+              </td>
+            </tr>` : ""}
+
+            <!-- PDF callout -->
+            <tr>
+              <td style="padding:20px 32px 8px 32px;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f8fbff;border:1px solid #d7e6fb;border-radius:14px;">
+                  <tr>
+                    <td valign="middle" style="padding:16px 18px;width:48px;">
+                      <div style="width:40px;height:40px;border-radius:10px;background:#1d4ed8;color:#ffffff;text-align:center;line-height:40px;font-size:18px;font-weight:800;">PDF</div>
+                    </td>
+                    <td valign="middle" style="padding:16px 18px 16px 4px;">
+                      <div style="font-size:14px;font-weight:700;color:#0f172a;line-height:1.3;">Relatório completo em anexo</div>
+                      <div style="margin-top:4px;font-size:12px;color:#475569;line-height:1.5;">
+                        ${safeFileName ? safeFileName : "Documento PDF com todos os lançamentos detalhados."}
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- CTA -->
+            <tr>
+              <td align="center" style="padding:24px 32px 8px 32px;">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                  <tr>
+                    <td align="center" style="border-radius:12px;background:#1d4ed8;background:linear-gradient(135deg,#1d4ed8,#2563eb);">
+                      <a href="${panelUrl}" target="_blank" style="display:inline-block;padding:14px 28px;font-size:14px;font-weight:700;color:#ffffff;text-decoration:none;border-radius:12px;letter-spacing:.2px;">
+                        Acessar meu painel →
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Tips -->
+            <tr>
+              <td style="padding:8px 32px 28px 32px;">
+                <div style="margin-top:12px;font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#64748b;">Próximos passos</div>
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:10px;">
+                  <tr>
+                    <td style="padding:6px 0;font-size:13px;line-height:1.6;color:#334155;">
+                      <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#1d4ed8;vertical-align:middle;margin-right:8px;"></span>
+                      Confira o PDF anexo e valide os lançamentos do período.
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:6px 0;font-size:13px;line-height:1.6;color:#334155;">
+                      <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#22d3ee;vertical-align:middle;margin-right:8px;"></span>
+                      Envie novas contas pelo WhatsApp — texto, foto ou áudio.
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:6px 0;font-size:13px;line-height:1.6;color:#334155;">
+                      <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#86efac;vertical-align:middle;margin-right:8px;"></span>
+                      Acompanhe gráficos e tendências no painel web.
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Footer -->
+            <tr>
+              <td style="padding:20px 32px 24px 32px;background:#f8fafc;border-top:1px solid #e2e8f0;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                  <tr>
+                    <td>
+                      <div style="font-size:13px;font-weight:700;color:#0f172a;">ozapteconta</div>
+                      <div style="margin-top:4px;font-size:11px;color:#64748b;line-height:1.6;">
+                        Seu controle financeiro inteligente via WhatsApp.<br/>
+                        Este e-mail foi enviado automaticamente. Se tiver dúvidas, basta respondê-lo.
+                      </div>
+                      <div style="margin-top:12px;font-size:11px;color:#94a3b8;">
+                        © ${new Date().getFullYear()} ozapteconta • Todos os direitos reservados
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
           </table>
+          <div style="max-width:640px;margin:14px auto 0 auto;font-size:11px;color:#94a3b8;text-align:center;line-height:1.6;">
+            Você está recebendo este e-mail porque é cliente ozapteconta.
+          </div>
         </td>
       </tr>
     </table>
@@ -388,8 +562,12 @@ export async function sendFinancialReportNow(phone: string, targetEmail?: string
       html: buildReportEmailHtml({
         recipientName: report.client?.fullName,
         title: report.title,
-        result: formatCurrency(report.finalBalance),
-        periodLabel: "relatorio diario",
+        periodLabel: "Relatório diário",
+        totalToPay: report.totalToPay,
+        totalToReceive: report.totalToReceive,
+        finalBalance: report.finalBalance,
+        transactionCount: report.transactions.length,
+        fileName: report.fileName,
       }),
       fileName: report.fileName,
       content: report.pdfBuffer,
@@ -423,7 +601,16 @@ export async function sendFinancialReportNow(phone: string, targetEmail?: string
       to: emailTo,
       subject: report.title,
       text: `Olá! Segue em anexo o seu ${report.title.toLowerCase()} do ozapteconta. Resultado final: ${formatCurrency(report.finalBalance)}.`,
-      html: `<p>Olá!</p><p>Segue em anexo o seu <strong>${report.title}</strong> do ozapteconta.</p><p><strong>Resultado final:</strong> ${formatCurrency(report.finalBalance)}</p>`,
+      html: buildReportEmailHtml({
+        recipientName: report.client?.fullName,
+        title: report.title,
+        periodLabel: "Relatório diário",
+        totalToPay: report.totalToPay,
+        totalToReceive: report.totalToReceive,
+        finalBalance: report.finalBalance,
+        transactionCount: report.transactions.length,
+        fileName: report.fileName,
+      }),
       fileName: report.fileName,
       content: report.pdfBuffer,
     });
@@ -465,8 +652,12 @@ export async function processWeeklyFinancialReports(): Promise<{ sent: number; f
           html: buildReportEmailHtml({
             recipientName: client.fullName,
             title: report.title,
-            result: formatCurrency(report.finalBalance),
-            periodLabel: "relatorio semanal",
+            periodLabel: "Relatório semanal",
+            totalToPay: report.totalToPay,
+            totalToReceive: report.totalToReceive,
+            finalBalance: report.finalBalance,
+            transactionCount: report.transactions.length,
+            fileName: report.fileName,
           }),
           fileName: report.fileName,
           content: report.pdfBuffer,
