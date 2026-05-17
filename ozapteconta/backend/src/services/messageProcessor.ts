@@ -980,11 +980,232 @@ async function findKnowledgeAnswer(text: string): Promise<string | null> {
 function isNutritionQuery(text: string): boolean {
   const normalized = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
-  const nutritionIntent = /caloria|kcal|proteina|carbo|gordura|fibra|saudavel|engorda|emagrece|dieta|indice glicemico|sodio|colesterol|vitamina|mineral|porcao|quantidade|pode comer|deve comer|faz bem|faz mal|refeicao|alimento|alimentacao|comida|lanche|janta|jantar|cafe da manha|cafe da tarde|ceia|quantas vezes|quanto tempo posso comer/;
-  const foodTerms = /arroz|feijao|frango|ovo|banana|maca|pao|queijo|leite|carne|peixe|batata|mandioca|salada|alface|tomate|abacate|aveia|iogurte|whey|way|suplemento|pizza|hamburguer|hamburger|sushi|refrigerante|bolo|chocolate|biscoito|bolacha|macarrao|pastel|coxinha|acai|suco|cafe|marmita|lanche/;
+  const nutritionIntent = /caloria|kcal|proteina|carbo|gordura|fibra|saudavel|engorda|emagrece|dieta|indice glicemico|sodio|colesterol|vitamina|mineral|porcao|quantidade|pode comer|deve comer|faz bem|faz mal|refeicao|alimento|alimentacao|comida|lanche|janta|jantar|cafe da manha|cafe da tarde|ceia|quantas vezes|quanto tempo posso comer|tmb|metabolismo|imc|indice de massa|taxa metabolica|tdee|gasto calorico|calorias.*dia|proteina.*dia|quanto.*proteina|deficit calorico|superavit|bulking|cutting|hipertrofia|musculacao|calistenia|crossfit|treino.*comer|comer.*treino|pre.*treino|pos.*treino/;
+  const foodTerms = /arroz|feijao|frango|ovo|banana|maca|pao|queijo|leite|carne|peixe|batata|mandioca|salada|alface|tomate|abacate|aveia|iogurte|whey|way|suplemento|pizza|hamburguer|hamburger|sushi|refrigerante|bolo|chocolate|biscoito|bolacha|macarrao|pastel|coxinha|acai|suco|cafe|marmita|lanche|cottage|granola|tapioca|inhame|quinoa|brocolis|espinafre|atum|salmao|tilapia|peito.*frango|clara.*ovo/;
 
   if (nutritionIntent.test(normalized)) return true;
-  return foodTerms.test(normalized) && /(quant|caloria|saudavel|engorda|emagrece|pode comer|deve comer|faz bem|faz mal|porcao|quantidade)/.test(normalized);
+  return foodTerms.test(normalized) && /(quant|caloria|saudavel|engorda|emagrece|pode comer|deve comer|faz bem|faz mal|porcao|quantidade|proteina|macro)/.test(normalized);
+}
+
+// ─── Calculadora de Métricas Corporais ────────────────────────────────────────
+
+interface BodyMetrics {
+  genero: "M" | "F" | null;
+  peso: number | null;    // kg
+  altura: number | null;  // cm
+  idade: number | null;   // anos
+  nivel: "sedentario" | "leve" | "moderado" | "ativo" | "muito_ativo" | null;
+  objetivo: "emagrecer" | "manter" | "ganhar" | null;
+  treino: "musculacao" | "calistenia" | "crossfit" | "cardio" | null;
+}
+
+function extractBodyMetrics(text: string): BodyMetrics {
+  const n = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+  const genero: "M" | "F" | null =
+    /\b(homem|masculino|sou h\b|menino|macho)\b/.test(n) ? "M" :
+    /\b(mulher|feminino|sou m\b|menina|femea)\b/.test(n) ? "F" : null;
+
+  // Peso: "80kg", "80 kg", "peso 80", "80,5 kg"
+  let peso: number | null = null;
+  const pesoMatch = n.match(/(?:peso\s+|pesando\s+)?(\d{2,3}(?:[.,]\d{1,2})?)\s*kg/);
+  if (pesoMatch) peso = parseFloat(pesoMatch[1].replace(",", "."));
+
+  // Altura: "1.75m", "175cm", "1m75", "1,75"
+  let altura: number | null = null;
+  const alturaMetro = n.match(/(\d[.,]\d{2})\s*m(?:etros?)?(?!\w)/);
+  const alturaCm = n.match(/(\d{3})\s*cm/);
+  const alturaM2 = n.match(/(\d)\s*m\s*e?\s*(\d{2})\b/);
+  if (alturaMetro) altura = parseFloat(alturaMetro[1].replace(",", ".")) * 100;
+  else if (alturaCm) altura = parseFloat(alturaCm[1]);
+  else if (alturaM2) altura = parseFloat(alturaM2[1]) * 100 + parseFloat(alturaM2[2]);
+
+  // Idade
+  let idade: number | null = null;
+  const idadeMatch = n.match(/(\d{1,2})\s*anos?/);
+  if (idadeMatch) idade = parseInt(idadeMatch[1]);
+
+  // Nível de atividade
+  const nivel: BodyMetrics["nivel"] =
+    /sedentario|nao pratico|nao faz|nao treino/.test(n) ? "sedentario" :
+    /\b(1|2)\s*vez(?:es)?\s*(?:por\s*)?semana|caminhada\s+leve|pouco\s+ativo/.test(n) ? "leve" :
+    /\b(3|4)\s*vez(?:es)?\s*(?:por\s*)?semana|3x|4x|moderado/.test(n) ? "moderado" :
+    /\b(5|6)\s*vez(?:es)?\s*(?:por\s*)?semana|5x|6x|ativo|diariamente/.test(n) ? "ativo" :
+    /\b7\s*vez(?:es)?|7x|muito\s*ativo|trabalho\s*pesado|todo\s*dia/.test(n) ? "muito_ativo" : null;
+
+  // Objetivo
+  const objetivo: BodyMetrics["objetivo"] =
+    /emagrec|perder\s*peso|deficit|secar|definir|cutting/.test(n) ? "emagrecer" :
+    /ganhar\s*massa|hipertrofia|crescer|engordar|bulking|aumentar\s*massa/.test(n) ? "ganhar" :
+    /manter\s*peso|manutencao|equilibrio/.test(n) ? "manter" : null;
+
+  // Tipo de treino
+  const treino: BodyMetrics["treino"] =
+    /musculacao|academia|halter|barra\s*fixa\s*com\s*peso|supino|agachamento\s*com\s*barra/.test(n) ? "musculacao" :
+    /calistenia|calisthenics|barra\s*fixa|flexao|prancha\s*longa|street\s*workout/.test(n) ? "calistenia" :
+    /crossfit|wod|functional|funcional/.test(n) ? "crossfit" :
+    /cardio|corrida|ciclismo|natacao|aerobico|caminhada/.test(n) ? "cardio" : null;
+
+  return { genero, peso, altura, idade, nivel, objetivo, treino };
+}
+
+function calculateIMC(peso: number, alturaCm: number): { imc: number; categoria: string; emoji: string; orientacao: string } {
+  const alturaM = alturaCm / 100;
+  const imc = peso / (alturaM * alturaM);
+  const imcRound = Math.round(imc * 100) / 100;
+
+  let categoria: string; let emoji: string; let orientacao: string;
+  if (imc < 18.5)      { categoria = "Abaixo do peso";      emoji = "⚠️";  orientacao = "Aumente a ingestão calórica com foco em proteínas e gorduras boas."; }
+  else if (imc < 25.0) { categoria = "Peso normal";         emoji = "✅";  orientacao = "Excelente! Mantenha a alimentação equilibrada e pratique atividade física."; }
+  else if (imc < 30.0) { categoria = "Sobrepeso";           emoji = "⚠️";  orientacao = "Reduza carboidratos refinados, aumente proteínas e crie déficit calórico moderado."; }
+  else if (imc < 35.0) { categoria = "Obesidade Grau I";    emoji = "🔴";  orientacao = "Déficit calórico de 400–500 kcal/dia com acompanhamento. Priorize proteínas e movimento diário."; }
+  else if (imc < 40.0) { categoria = "Obesidade Grau II";   emoji = "🔴";  orientacao = "Consulte um profissional de saúde. Alimentação com déficit e exercício supervisionado são essenciais."; }
+  else                  { categoria = "Obesidade Grau III";  emoji = "🚨";  orientacao = "Acompanhamento médico e nutricional urgente. Mudança de estilo de vida é fundamental."; }
+
+  return { imc: imcRound, categoria, emoji, orientacao };
+}
+
+interface BMRResult {
+  tmb: number;
+  tdee: number;
+  deficit: number;
+  surplus: number;
+  nivelTexto: string;
+}
+
+function calculateBMR(metrics: BodyMetrics): BMRResult | null {
+  if (!metrics.peso || !metrics.altura || !metrics.idade || !metrics.genero) return null;
+
+  // Fórmula Mifflin-St Jeor (mais precisa para adultos)
+  let tmb: number;
+  if (metrics.genero === "M") {
+    tmb = (10 * metrics.peso) + (6.25 * metrics.altura) - (5 * metrics.idade) + 5;
+  } else {
+    tmb = (10 * metrics.peso) + (6.25 * metrics.altura) - (5 * metrics.idade) - 161;
+  }
+
+  const multipliers: Record<string, number> = {
+    sedentario:   1.20,
+    leve:         1.375,
+    moderado:     1.55,
+    ativo:        1.725,
+    muito_ativo:  1.90,
+  };
+  const nivelLabels: Record<string, string> = {
+    sedentario:   "Sedentário (sem exercício)",
+    leve:         "Levemente ativo (1–3x/semana)",
+    moderado:     "Moderadamente ativo (3–5x/semana)",
+    ativo:        "Muito ativo (6–7x/semana)",
+    muito_ativo:  "Extremamente ativo (trabalho físico + treino)",
+  };
+
+  const mult = multipliers[metrics.nivel ?? "sedentario"];
+  const tdee = Math.round(tmb * mult);
+
+  return {
+    tmb: Math.round(tmb),
+    tdee,
+    deficit:  tdee - 500,  // −0,5kg/semana
+    surplus:  tdee + 300,  // ganho limpo controlado
+    nivelTexto: nivelLabels[metrics.nivel ?? "sedentario"],
+  };
+}
+
+function getProteinGuide(metrics: BodyMetrics): string {
+  if (!metrics.peso) return "";
+
+  const protRanges: Record<string, [number, number]> = {
+    musculacao: [1.8, 2.2],
+    crossfit:   [1.8, 2.4],
+    calistenia: [1.6, 2.0],
+    cardio:     [1.4, 1.8],
+    default:    [1.2, 1.6],
+  };
+  const [protMin, protMax] = protRanges[metrics.treino ?? "default"];
+  const protMinG = Math.round(metrics.peso * protMin);
+  const protMaxG = Math.round(metrics.peso * protMax);
+
+  const treinoLabel: Record<string, string> = {
+    musculacao: "🏋️ Musculação",
+    crossfit:   "🏅 CrossFit",
+    calistenia: "🤸 Calistenia",
+    cardio:     "🏃 Cardio/Aeróbico",
+  };
+  const treinoTexto = metrics.treino ? treinoLabel[metrics.treino] : "💪 Geral";
+
+  const proteinas_M = `🥩 Frango grelhado — 31g/100g\n🥚 Ovos inteiros — 13g/100g\n🐟 Atum em lata — 25g/100g\n🥩 Patinho/Alcatra — 27g/100g\n🧀 Cottage cheese — 12g/100g\n🥛 Whey Protein — 22–25g/dose\n🐟 Salmão/Tilápia — 20–22g/100g\n🫘 Lentilha — 9g/100g\n🥜 Pasta de amendoim — 25g/100g`;
+  const proteinas_F = `🍗 Frango grelhado — 31g/100g\n🥚 Ovo cozido — 13g/100g\n🐟 Tilápia/Merluza — 20g/100g\n🧀 Iogurte grego — 10g/100g\n🧀 Cottage cheese — 12g/100g\n🥛 Whey isolado — 25g/dose\n🫘 Grão-de-bico — 9g/100g\n🥜 Pasta de amendoim — 25g/100g\n🥩 Carne magra — 24g/100g`;
+  const proteinas = metrics.genero === "F" ? proteinas_F : proteinas_M;
+  const genLabel = metrics.genero === "F" ? " — Mulher" : metrics.genero === "M" ? " — Homem" : "";
+
+  return `\n\n💪 *Proteína diária — ${treinoTexto}${genLabel}*\n` +
+    `Meta: *${protMinG}g – ${protMaxG}g/dia* _(${protMin}–${protMax}g × ${metrics.peso}kg)_\n\n` +
+    `🏆 *Melhores fontes proteicas:*\n${proteinas}\n\n` +
+    `💡 *Dica prática:* Distribua em 4–5 refeições ao longo do dia.\n` +
+    `Proteína > Carboidrato = mais saciedade, mais músculo, menos gordura.`;
+}
+
+function formatBMRResponse(text: string): string {
+  const metrics = extractBodyMetrics(text);
+
+  if (!metrics.peso || !metrics.altura || !metrics.idade) {
+    const missing: string[] = [];
+    if (!metrics.genero)  missing.push("• ⚥ *Sexo* — homem ou mulher");
+    if (!metrics.peso)    missing.push("• ⚖️ *Peso* — ex: 75kg");
+    if (!metrics.altura)  missing.push("• 📏 *Altura* — ex: 1,72m ou 172cm");
+    if (!metrics.idade)   missing.push("• 🎂 *Idade* — ex: 28 anos");
+
+    return `🧮 *Calculadora de Metabolismo Basal (TMB)*\n\n` +
+      `Para calcular seu metabolismo com precisão, preciso de:\n${missing.join("\n")}\n\n` +
+      `*Atividade física (opcional):*\n• sedentário, 1–2x/semana, 3–4x/semana, 5–6x/semana, todo dia\n\n` +
+      `📝 Exemplo: _"Sou mulher, 65kg, 1,62m, 27 anos, treino musculação 4x por semana, quero emagrecer"_`;
+  }
+
+  const bmr = calculateBMR(metrics);
+  const imcData = calculateIMC(metrics.peso, metrics.altura);
+  const proteinGuide = getProteinGuide(metrics);
+  const genEmoji = metrics.genero === "M" ? "👨" : metrics.genero === "F" ? "👩" : "🧑";
+
+  let resp = `🧮 *Resultado — Metabolismo Basal*\n\n`;
+  resp += `${genEmoji} *Seus dados:* ${metrics.peso}kg | ${(metrics.altura / 100).toFixed(2)}m | ${metrics.idade} anos\n`;
+  if (bmr) resp += `🏃 *Nível de atividade:* ${bmr.nivelTexto}\n`;
+  resp += `━━━━━━━━━━━━━━━━\n`;
+
+  if (bmr) {
+    resp += `🔥 *TMB (repouso total):* *${bmr.tmb} kcal/dia*\n`;
+    resp += `⚡ *TDEE (gasto real/dia):* *${bmr.tdee} kcal/dia*\n`;
+  }
+  resp += `━━━━━━━━━━━━━━━━\n`;
+  resp += `📊 *IMC:* ${imcData.imc} kg/m² ${imcData.emoji}\n`;
+  resp += `📋 *Classificação:* ${imcData.categoria}\n`;
+  resp += `💬 ${imcData.orientacao}\n`;
+  resp += `━━━━━━━━━━━━━━━━\n`;
+
+  if (bmr) {
+    resp += `🎯 *Metas calóricas diárias:*\n`;
+    resp += `🔻 *Emagrecer* (−0,5kg/sem): *${bmr.deficit} kcal*\n`;
+    resp += `⚖️ *Manter peso:* *${bmr.tdee} kcal*\n`;
+    resp += `📈 *Ganhar massa limpa:* *${bmr.surplus} kcal*\n`;
+    resp += `━━━━━━━━━━━━━━━━\n`;
+  }
+
+  resp += `📐 *Como o IMC é calculado:*\n`;
+  resp += `IMC = peso ÷ (altura × altura)\n`;
+  resp += `= ${metrics.peso} ÷ (${(metrics.altura / 100).toFixed(2)} × ${(metrics.altura / 100).toFixed(2)})\n`;
+  resp += `= *${imcData.imc}*\n`;
+  resp += `━━━━━━━━━━━━━━━━\n`;
+  resp += `💡 *Regra de ouro:* Proteína > Carboidrato${proteinGuide}\n`;
+  resp += `━━━━━━━━━━━━━━━━\n`;
+  resp += `⚕️ _Estimativas baseadas em Mifflin-St Jeor. Para acompanhamento preciso, consulte um nutricionista._`;
+
+  return resp;
+}
+
+function isBMRQuery(text: string): boolean {
+  const n = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const explicitBMR = /\b(tmb|taxa metabolica|metabolismo basal|imc|indice de massa corporal|calcular.*metabolismo|metabolismo.*calcular|calcular.*imc|imc.*calcul|meu.*metabolismo|metabolismo.*basal|tdee|gasto calorico|necessidade calorica|calorias.*que preciso.*dia|quantas calorias.*preciso)\b/.test(n);
+  const implicitBMR = /(peso|kg|altura|metros|cm|anos)/.test(n) && /(metabolismo|imc|caloria|tmb|tdee|emagrec|ganhar|treino|deficit|superavit)/.test(n);
+  return explicitBMR || implicitBMR;
 }
 
 function getNutritionClarificationPrompt(text: string): string | null {
@@ -1000,7 +1221,7 @@ function getNutritionClarificationPrompt(text: string): string | null {
   if (normalized.length > 80) return null;
   if (/\b(r\$|reais|vence|vencimento|dia\s+\d+|aluguel|conta|boleto|paguei|pagar|recebi|receber)\b/.test(normalized)) return null;
 
-  const foodOrDrinkTerms = /\b(agua|suco|cafe|cha|leite|refrigerante|vitamina|banana|maca|pao|queijo|ovo|arroz|feijao|frango|carne|peixe|batata|mandioca|salada|alface|tomate|abacate|aveia|iogurte|whey|way|suplemento|pizza|hamburguer|hamburger|sushi|bolo|chocolate|biscoito|bolacha|macarrao|pastel|coxinha|acai|marmita|lanche)\b/;
+  const foodOrDrinkTerms = /\b(agua|suco|cafe|cha|leite|refrigerante|vitamina|banana|maca|pao|queijo|ovo|arroz|feijao|frango|carne|peixe|batata|mandioca|salada|alface|tomate|abacate|aveia|iogurte|whey|way|suplemento|pizza|hamburguer|hamburger|sushi|bolo|chocolate|biscoito|bolacha|macarrao|pastel|coxinha|acai|marmita|lanche|cottage|granola|tapioca|atum|salmao|tilapia)\b/;
   const fillerOnly = /\b(um|uma|uns|umas|o|a|os|as|de|do|da|com|sem|e|copo|xicara|prato|pedaco|pedaço|fatia|porcao)\b/g;
   const meaningfulContent = normalized.replace(fillerOnly, " ").replace(/\s+/g, " ").trim();
 
@@ -1009,44 +1230,59 @@ function getNutritionClarificationPrompt(text: string): string | null {
 
   const subject = text.trim().replace(/\s+/g, " ");
   const asksCalories = /caloria|kcal|engorda|emagrece/.test(normalized);
-  const asksMacro = /proteina|carbo|gordura|fibra/.test(normalized);
+  const asksMacro = /proteina|carbo|gordura|fibra|macro/.test(normalized);
   const asksRoutine = /quantas vezes|frequencia|frequ[eê]ncia|todo dia|diario|di[aá]rio/.test(normalized);
+  const asksTreino = /treino|musculacao|academia|calistenia|crossfit|pre.treino|pos.treino/.test(normalized);
+
+  if (asksTreino) {
+    return (
+      `💪 *${subject}* — boa escolha para treino!\n\n` +
+      `Me conta mais para personalizar melhor:\n` +
+      `• 🎯 Qual seu objetivo? emagrecer / manter / ganhar massa\n` +
+      `• ⚖️ Peso aproximado? (ex: 75kg)\n` +
+      `• 🏋️ Tipo de treino? musculação / calistenia / crossfit\n\n` +
+      `Assim te dou as quantidades certas de proteína e calorias!`
+    );
+  }
 
   if (asksCalories) {
     return (
-      `🥗 Posso te ajudar com *${subject}*.` +
-      "\nMe diga a quantidade aproximada para eu estimar melhor as calorias." +
-      `\nExemplo: *2 fatias de ${subject}*`
+      `🔥 Posso calcular as calorias de *${subject}*!\n` +
+      `Me diz a quantidade para ser mais preciso:\n` +
+      `Exemplo: *2 fatias de ${subject}* ou *100g de ${subject}*\n\n` +
+      `💡 _Lembre: proteína tem 4 kcal/g, carbo 4 kcal/g, gordura 9 kcal/g_`
     );
   }
 
   if (asksMacro) {
     return (
-      `🥗 Ótimo ponto sobre *${subject}*.` +
-      "\nVocê quer foco em qual parte?" +
-      "\n• proteína" +
-      "\n• carboidrato" +
-      "\n• gordura/fibra" +
-      `\n\nSe quiser, já mando um resumo completo de *${subject}*.`
+      `💪 *${subject}* tem perfil de macros interessante!\n\n` +
+      `Qual detalhe você quer?\n` +
+      `• 🥩 Quantidade de proteína\n` +
+      `• 🍞 Carboidratos e impacto glicêmico\n` +
+      `• 🫒 Gorduras (boas ou ruins?)\n` +
+      `• 📊 Perfil completo de macros\n\n` +
+      `Manda a quantidade e te passo tudo!`
     );
   }
 
   if (asksRoutine) {
     return (
-      `🥗 Consigo te orientar sobre frequência de consumo de *${subject}*.` +
-      "\nMe diga seu objetivo: manter peso, emagrecer ou ganhar massa." +
-      `\nAí eu te passo uma recomendação prática para *${subject}*.`
+      `📅 Frequência ideal de *${subject}* depende do seu objetivo.\n\n` +
+      `Me diz:\n` +
+      `• 🎯 Emagrecer, manter ou ganhar massa?\n` +
+      `• 🏃 Você pratica exercício?\n\n` +
+      `Com isso te passo a frequência e porção certa para o seu caso!`
     );
   }
 
   return (
-    `🥗 Posso te ajudar com *${subject}*, mas sua pergunta ficou aberta.\n\n` +
-    `O que você quer saber?\n` +
-    `• calorias\n` +
-    `• se faz bem\n` +
-    `• frequência/quantidade ideal\n` +
-    `• outra dúvida\n\n` +
-    `Se quiser, pode mandar assim: *quantas calorias tem ${subject}?*`
+    `🥗 Posso te ajudar com *${subject}*! O que você quer saber?\n\n` +
+    `• 🔥 Calorias e macros\n` +
+    `• ✅ Se faz bem ou não\n` +
+    `• ⏱️ Frequência e porção ideal\n` +
+    `• 💪 Relação com treino\n\n` +
+    `Manda assim: _"quantas calorias tem ${subject}?"_ ou _"${subject} engorda?"_`
   );
 }
 
@@ -1445,10 +1681,24 @@ export async function processText(phone: string, senderName: string | undefined,
       ? "🔒 Consulta FIPE disponível apenas no plano *Completo (R$ 9,90)*.\n\nNo plano básico você pode usar contas a pagar e a receber normalmente."
       : getFipeHelp();
   } else {
+    // ── Calculadora de Metabolismo/IMC (antes da IA) ─────────────────────────
+    if (isBMRQuery(text)) {
+      response = formatBMRResponse(text);
+
+      await saveContext(canonicalPhone, [
+        ...history,
+        { role: "user", content: text },
+        { role: "assistant", content: response },
+      ]);
+
+      await sendMessage(canonicalPhone, response);
+      return;
+    }
+
     if (isNutritionQuery(text)) {
       response =
         (await resolveNutritionAnswer(text, history)) ??
-        "🥗 Posso analisar alimentos, calorias e frequência de consumo, mas preciso que você diga o alimento e, se possível, a quantidade.\n\nExemplo: *2 ovos, arroz, feijão e bife no almoço*";
+        "🥗 Posso analisar alimentos, calorias e macros, mas preciso que você diga o alimento e, se possível, a quantidade.\n\nExemplo: *2 ovos, arroz, feijão e bife no almoço*";
 
       await saveContext(canonicalPhone, [
         ...history,
