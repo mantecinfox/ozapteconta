@@ -1225,6 +1225,32 @@ function isBMRQuery(text: string): boolean {
   return explicitBMR || implicitBMR;
 }
 
+/**
+ * Detecta resposta de continuação ao prompt da Calculadora Basal.
+ * Quando o último turno do bot foi o template pedindo sexo/peso/altura/idade,
+ * a próxima mensagem do usuário com esses dados deve ir para a calculadora,
+ * NÃO para o extrator de transação financeira.
+ */
+function isBMRFollowUp(text: string, history: AIMessage[]): boolean {
+  // Encontra a última mensagem do assistente
+  const lastAssistant = [...history].reverse().find((m) => m.role === "assistant");
+  if (!lastAssistant) return false;
+  const a = String(lastAssistant.content || "");
+  const promptedBMR =
+    /Calculadora de Taxa Basal|taxa metab[óo]lica basal/i.test(a) &&
+    /Sexo \(homem\/mulher\)|Peso \(ex|Altura \(ex|Idade \(ex/i.test(a);
+  if (!promptedBMR) return false;
+
+  // A resposta do usuário precisa conter pelo menos 2 dos 4 indicadores corporais
+  const n = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  let hits = 0;
+  if (/\b(homem|mulher|masculino|feminino|macho|femea|menino|menina)\b/.test(n)) hits++;
+  if (/\b\d{2,3}\s*kg\b|\bpeso\s*[:\-]?\s*\d{2,3}|\bpesando\b/.test(n)) hits++;
+  if (/\d[.,]\d{2}\s*m(?!\w)|\d{3}\s*cm|\baltura\s*[:\-]?\s*\d|\d\s*m\s*\d{2}\b/.test(n)) hits++;
+  if (/\d{1,2}\s*anos?\b|\bidade\s*[:\-]?\s*\d{1,2}/.test(n)) hits++;
+  return hits >= 2;
+}
+
 // ─── Detecção de Intenção Nutricional Ampla ────────────────────────────────────
 
 function isAmbiguousNutritionIntent(text: string, history: AIMessage[]): boolean {
@@ -1811,7 +1837,7 @@ export async function processText(phone: string, senderName: string | undefined,
       : getFipeHelp();
   } else {
     // ── Calculadora de Metabolismo/IMC (prioridade máxima — antes do menu) ──────
-    if (isBMRQuery(text) || isChoosingBMRFromMenu(text, history)) {
+    if (isBMRQuery(text) || isChoosingBMRFromMenu(text, history) || isBMRFollowUp(text, history)) {
       response = formatBMRResponse(text);
 
       await saveContext(canonicalPhone, [
@@ -2145,7 +2171,7 @@ export async function processAudioBuffer(
     }
   }
 
-  if (transcription && (isBMRQuery(transcription) || isChoosingBMRFromMenu(transcription, history))) {
+  if (transcription && (isBMRQuery(transcription) || isChoosingBMRFromMenu(transcription, history) || isBMRFollowUp(transcription, history))) {
     const response = `🎤 _"${transcription}"_\n\n${formatBMRResponse(transcription)}`;
     await saveContext(canonicalPhone, [...history, { role: "user", content: `[áudio] ${transcription}` }, { role: "assistant", content: response }]);
     pendingNotice.cancel();
@@ -2294,7 +2320,7 @@ export async function processAudio(
     }
   }
 
-  if (transcription && (isBMRQuery(transcription) || isChoosingBMRFromMenu(transcription, history))) {
+  if (transcription && (isBMRQuery(transcription) || isChoosingBMRFromMenu(transcription, history) || isBMRFollowUp(transcription, history))) {
     const response = `🎤 _"${transcription}"_\n\n${formatBMRResponse(transcription)}`;
     await saveContext(canonicalPhone, [...history, { role: "user", content: `[áudio] ${transcription}` }, { role: "assistant", content: response }]);
     pendingNotice.cancel();
