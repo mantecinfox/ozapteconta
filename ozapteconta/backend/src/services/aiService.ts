@@ -147,31 +147,36 @@ function normalizeModelForProvider(provider: string, model: string | null | unde
 }
 
 async function ensureOllamaModelAvailable(baseUrl: string, model: string): Promise<void> {
-  const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/api/tags`, {
-    signal: AbortSignal.timeout(20000),
-  });
+  try {
+    const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/api/tags`, {
+      signal: AbortSignal.timeout(15000),
+    });
 
-  if (!response.ok) {
-    throw new Error(`OLLAMA indisponível em ${baseUrl}. Verifique se o serviço está ativo.`);
-  }
+    // Se o servidor não responder corretamente, apenas continua —
+    // o próprio Ollama retornará erro na inferência se necessário.
+    if (!response.ok) {
+      logger.warn(`[OLLAMA] /api/tags retornou ${response.status} em ${baseUrl} — prosseguindo`);
+      return;
+    }
 
-  const data = (await response.json()) as {
-    models?: Array<{ name?: string; model?: string }>;
-  };
-  const available = (data.models || [])
-    .map((item) => item.name || item.model)
-    .filter(Boolean) as string[];
+    const data = (await response.json()) as {
+      models?: Array<{ name?: string; model?: string }>;
+    };
+    const available = (data.models || [])
+      .map((item) => item.name || item.model)
+      .filter(Boolean) as string[];
 
-  if (available.length === 0) {
-    throw new Error(
-      `OLLAMA não possui modelos instalados. Instale um modelo no servidor, por exemplo: ollama pull ${model}`,
-    );
-  }
-
-  if (!available.includes(model)) {
-    throw new Error(
-      `Modelo OLLAMA "${model}" não instalado. Modelos disponíveis: ${available.join(", ")}`,
-    );
+    // Só lança erro se a lista veio, mas o modelo claramente não está
+    if (available.length > 0 && !available.includes(model)) {
+      throw new Error(
+        `Modelo OLLAMA "${model}" não instalado. Modelos disponíveis: ${available.join(", ")}`,
+      );
+    }
+  } catch (err) {
+    // Propaga apenas erros de "modelo não instalado" (explícitos)
+    if (err instanceof Error && err.message.includes("não instalado")) throw err;
+    // Timeout ou falha de rede na checagem → apenas avisa e continua
+    logger.warn(`[OLLAMA] Aviso na verificação de modelos em ${baseUrl}: ${String(err)}`);
   }
 }
 
