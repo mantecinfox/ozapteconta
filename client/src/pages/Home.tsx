@@ -3,7 +3,7 @@ import { ArrowRight, CheckCircle2, TrendingUp } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
 /**
- * Design Philosophy: O Zap Te Conta - Gatilhos Mentais Poderosos
+ * Design Philosophy: OZAPTECHAMA - Gatilhos Mentais Poderosos
  * - Paleta: Azul Escuro (#0F172A), Branco, Cinza (#6B7280), Preto
  * - Foco em: Urgência, Escassez, Prova Social, FOMO, Transformação
  * - Elementos: Contadores, Números grandes, Badges, Depoimentos reais
@@ -15,7 +15,7 @@ export default function Home() {
   const [totalSavings, setTotalSavings] = useState(86000);
   const [spotsLeft, setSpotsLeft] = useState(42);
   const whatsappNumber = '553173124224';
-  const whatsappMessage = 'Olá! Quero começar a usar o O Zap Te Conta pelo WhatsApp.';
+  const whatsappMessage = 'Olá! Quero começar a usar o OZAPTECHAMA pelo WhatsApp.';
   const whatsappLink = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(whatsappMessage)}`;
   const whatsappQrCode = `https://api.qrserver.com/v1/create-qr-code/?size=320x320&data=${encodeURIComponent(whatsappLink)}`;
 
@@ -34,13 +34,11 @@ export default function Home() {
       {/* Header Sticky com Urgência */}
       <header className="sticky top-0 z-50 bg-blue-900 text-white border-b-4 border-green-500">
         <div className="container mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center">
-              <span className="text-blue-900 font-bold text-lg">Z</span>
-            </div>
+          <div className="flex items-center gap-3">
+            <img src="/logo-ozaptechama.svg" alt="OZAPTECHAMA Logo" className="h-12 w-auto" />
             <div>
-              <span className="font-bold text-lg">O ZAP TE CONTA</span>
-              <p className="text-xs text-green-300">Planos a partir de R$ 4,99/mês</p>
+              <span className="font-bold text-lg">OZAPTECHAMA</span>
+              <p className="text-xs text-green-300">Seu Assistente Financeiro</p>
             </div>
           </div>
           <div className="hidden md:flex gap-4 text-sm items-center">
@@ -62,7 +60,7 @@ export default function Home() {
                   PLANOS ACESSÍVEIS • PIX OU CARTÃO • 100% BRASILEIRO
                 </div>
                 <h1 className="text-5xl md:text-6xl font-bold leading-tight">
-                  O ZAP TE CONTA
+                  OZAPTECHAMA
                 </h1>
                 <p className="text-2xl text-green-300 font-bold">
                   Seu Assistente Financeiro Direto no WhatsApp
@@ -108,7 +106,7 @@ export default function Home() {
                 </div>
                 <img
                   src="https://d2xsxph8kpxj0f.cloudfront.net/310419663028484296/azDT7U6LLduZEjhZgggaQx/hero-zap-te-conta-PrnpHjUY8RJnzx3WugEQsz.webp"
-                  alt="O Zap Te Conta no WhatsApp"
+                  alt="OZAPTECHAMA no WhatsApp"
                   className="h-auto w-full rounded-2xl object-contain"
                 />
                 <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs font-bold">
@@ -133,15 +131,15 @@ export default function Home() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-12 text-center">
             <div className="bg-white/10 backdrop-blur text-white p-5 rounded-2xl border border-white/20">
               <p className="text-3xl">{activeUsers.toLocaleString()}</p>
-              <p className="text-sm text-green-200">Clientes ativos</p>
+              <p className="text-sm text-green-200">Usuários OZAPTECHAMA</p>
             </div>
             <div className="bg-white/10 backdrop-blur text-white p-5 rounded-2xl border border-white/20">
               <p className="text-3xl">R$ {totalSavings.toLocaleString('pt-BR')}</p>
-              <p className="text-sm text-green-200">Em gastos organizados</p>
+              <p className="text-sm text-green-200">Em controle financeiro</p>
             </div>
             <div className="bg-green-500 text-black p-5 rounded-2xl font-bold shadow-xl">
               <p className="text-3xl">{spotsLeft}</p>
-              <p className="text-sm">Ativações promocionais</p>
+              <p className="text-sm">Ativações disponíveis</p>
             </div>
           </div>
 
@@ -181,7 +179,7 @@ export default function Home() {
             <div className="mx-auto w-full max-w-sm rounded-[2rem] bg-white p-5 text-center text-black shadow-2xl">
               <img
                 src={whatsappQrCode}
-                alt="QR Code para iniciar conversa no WhatsApp do O Zap Te Conta"
+                alt="QR Code para iniciar conversa no WhatsApp do OZAPTECHAMA"
                 className="mx-auto w-full max-w-[280px] rounded-2xl border-4 border-green-500 bg-white p-3"
               />
               <p className="mt-4 text-lg font-bold text-blue-900">Escaneie para falar agora</p>
@@ -201,7 +199,7 @@ export default function Home() {
           <div className="grid md:grid-cols-2 gap-8">
             <div className="bg-red-50 border-2 border-red-300 p-8 rounded-lg">
               <div className="text-5xl mb-4">😰</div>
-              <h3 className="text-2xl font-bold text-red-900 mb-4">ANTES - Sem O Zap Te Conta</h3>
+              <h3 className="text-2xl font-bold text-red-900 mb-4">ANTES - Sem OZAPTECHAMA</h3>
               <ul className="space-y-3 text-red-800">
                 <li>❌ Não sabe onde o dinheiro vai</li>
                 <li>❌ Dívidas acumuladas</li>
@@ -213,7 +211,7 @@ export default function Home() {
 
             <div className="bg-green-50 border-2 border-green-500 p-8 rounded-lg">
               <div className="text-5xl mb-4">🎉</div>
-              <h3 className="text-2xl font-bold text-green-900 mb-4">DEPOIS - Com O Zap Te Conta</h3>
+              <h3 className="text-2xl font-bold text-green-900 mb-4">DEPOIS - Com OZAPTECHAMA</h3>
               <ul className="space-y-3 text-green-800">
                 <li>✅ Visibilidade total de gastos</li>
                 <li>✅ Dívidas pagas</li>
@@ -287,7 +285,7 @@ export default function Home() {
       <section className="bg-blue-900 text-white py-16 md:py-24">
         <div className="container mx-auto px-4">
           <h2 className="text-4xl md:text-5xl font-bold text-center mb-12">
-            O que você ganha com O Zap Te Conta
+            O que você ganha com OZAPTECHAMA
           </h2>
 
           <div className="grid md:grid-cols-2 gap-8">
@@ -585,7 +583,7 @@ export default function Home() {
           <div className="mt-12 grid md:grid-cols-3 gap-6 text-center">
             <div>
               <p className="text-4xl font-bold text-green-500">{activeUsers.toLocaleString()}</p>
-              <p className="text-sm">Clientes ativos</p>
+              <p className="text-sm">Usuários OZAPTECHAMA ativos</p>
             </div>
             <div>
               <p className="text-4xl font-bold text-green-500">R$ {totalSavings.toLocaleString('pt-BR')}</p>
@@ -604,7 +602,9 @@ export default function Home() {
         <div className="container mx-auto px-4">
           <div className="grid md:grid-cols-4 gap-8 mb-8">
             <div>
-              <h3 className="font-bold text-lg mb-4">O ZAP TE CONTA</h3>
+              <div className="flex items-center gap-2 mb-3">
+                <img src="/logo-ozaptechama.svg" alt="OZAPTECHAMA" className="h-8 w-auto" />
+              </div>
               <p className="text-sm text-gray-300">Seu assistente financeiro direto no WhatsApp.</p>
             </div>
             <div>
@@ -633,7 +633,7 @@ export default function Home() {
             </div>
           </div>
           <div className="border-t border-blue-800 pt-8 text-center text-sm text-gray-300">
-            <p>&copy; 2024 O Zap Te Conta. Todos os direitos reservados. | www.ozapteconta.com.br</p>
+            <p>&copy; 2024 OZAPTECHAMA. Todos os direitos reservados. | www.ozaptechama.com.br</p>
           </div>
         </div>
       </footer>
