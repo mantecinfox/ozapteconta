@@ -32,18 +32,18 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-white text-black">
       {/* Header Sticky com Urgência */}
-      <header className="sticky top-0 z-50 bg-blue-900 text-white border-b-4 border-green-500">
-        <div className="container mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <img src="/logo-ozaptechama.svg" alt="OZAPTECHAMA Logo" className="h-12 w-auto" />
-            <div>
-              <span className="font-bold text-lg">OZAPTECHAMA</span>
-              <p className="text-xs text-green-300">Seu Assistente Financeiro</p>
+      <header className="sticky top-0 z-50 bg-white text-gray-900 border-b-4 border-green-500 shadow-md">
+        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <img src="/logo-ozaptechama.svg" alt="OZAPTECHAMA Logo" className="h-16 w-auto" />
+            <div className="hidden sm:block">
+              <span className="font-bold text-lg text-gray-900">OZAPTECHAMA</span>
+              <p className="text-xs text-green-600 font-semibold">Seu Assistente Financeiro</p>
             </div>
           </div>
           <div className="hidden md:flex gap-4 text-sm items-center">
-            <span className="bg-green-500 text-black px-3 py-1 rounded-full text-xs font-bold">PIX OU CARTÃO</span>
-            <Button className="bg-green-500 hover:bg-green-600 text-black font-bold">
+            <span className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-bold border border-green-300">PIX OU CARTÃO</span>
+            <Button className="bg-green-500 hover:bg-green-600 text-white font-bold">
               VER PLANOS
             </Button>
           </div>
@@ -603,7 +603,7 @@ export default function Home() {
           <div className="grid md:grid-cols-4 gap-8 mb-8">
             <div>
               <div className="flex items-center gap-2 mb-3">
-                <img src="/logo-ozaptechama.svg" alt="OZAPTECHAMA" className="h-8 w-auto" />
+              <img src="/logo-ozaptechama.svg" alt="OZAPTECHAMA" className="h-12 w-auto" />
               </div>
               <p className="text-sm text-gray-300">Seu assistente financeiro direto no WhatsApp.</p>
             </div>
