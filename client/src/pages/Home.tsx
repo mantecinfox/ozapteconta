@@ -31,44 +31,39 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-white text-black">
-      {/* Header Sticky com Urgência */}
-      <header className="sticky top-0 z-50 overflow-visible bg-white text-gray-900 border-b-4 border-green-500 shadow-md">
-        <div className="container mx-auto overflow-visible px-3 py-2.5 sm:px-4 sm:py-3">
-          <div className="flex min-h-[3.25rem] items-center gap-2 sm:min-h-14 sm:gap-3">
-            <a
-              href="/"
-              className="flex h-10 w-10 shrink-0 items-center justify-center sm:h-12 sm:w-12"
-              aria-label="OZAPTECHAMA - início"
-            >
-              <img
-                src="/logo-icon.svg?v=3"
-                alt=""
-                width={48}
-                height={48}
-                className="block h-10 w-10 sm:h-12 sm:w-12"
-                decoding="async"
-              />
-            </a>
-
-            <div className="min-w-0 flex-1 overflow-visible px-1 text-center leading-tight sm:px-2">
-              <p className="text-sm font-extrabold tracking-tight text-gray-900 sm:text-lg md:text-xl">
+      {/* Header: ícone + texto num único bloco (não usar logo-ozaptechama.svg — corta o nome) */}
+      <header className="sticky top-0 z-50 border-b-4 border-green-500 bg-white shadow-md">
+        <div className="container mx-auto flex h-16 items-center justify-center gap-4 px-4 md:justify-between">
+          <a
+            href="/"
+            className="flex max-w-full items-center gap-3"
+            aria-label="OZAPTECHAMA - início"
+          >
+            <img
+              src="/logo-icon.svg"
+              alt=""
+              width={44}
+              height={44}
+              className="size-11 shrink-0"
+              decoding="async"
+            />
+            <div className="min-w-0 leading-tight">
+              <p className="text-base font-extrabold tracking-tight text-gray-900 sm:text-lg">
                 OZAPTECHAMA
               </p>
-              <p className="text-[10px] font-semibold text-green-600 sm:text-xs md:text-sm">
+              <p className="text-xs font-medium text-green-600">
                 Seu Assistente Financeiro
               </p>
             </div>
+          </a>
 
-            <div className="flex w-10 shrink-0 items-center justify-end sm:w-12 md:w-auto md:gap-3">
-              <div className="hidden md:flex md:items-center md:gap-3">
-                <span className="shrink-0 rounded-full border border-green-300 bg-green-100 px-3 py-1 text-xs font-bold text-green-700">
-                  PIX OU CARTÃO
-                </span>
-                <Button className="shrink-0 bg-green-500 font-bold text-white hover:bg-green-600">
-                  VER PLANOS
-                </Button>
-              </div>
-            </div>
+          <div className="hidden shrink-0 items-center gap-3 md:flex">
+            <span className="rounded-full border border-green-300 bg-green-100 px-3 py-1 text-xs font-bold text-green-700">
+              PIX OU CARTÃO
+            </span>
+            <Button className="bg-green-500 font-bold text-white hover:bg-green-600">
+              VER PLANOS
+            </Button>
           </div>
         </div>
       </header>
