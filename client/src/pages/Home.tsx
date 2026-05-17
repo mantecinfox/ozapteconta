@@ -9,6 +9,12 @@ import { useState, useEffect } from 'react';
  * - Elementos: Contadores, Números grandes, Badges, Depoimentos reais
  */
 
+const TAGLINE_SHORT = 'Finanças, nutrição, comercial e mais';
+const TAGLINE =
+  'Finanças, nutrição, comercial, mercado financeiro e muito mais — direto no WhatsApp';
+const TAGLINE_FOOTER =
+  'Assistente para finanças, nutrição, comercial, mercado financeiro e muito mais, direto no WhatsApp.';
+
 export default function Home() {
   const [email, setEmail] = useState('');
   const [activeUsers, setActiveUsers] = useState(187);
@@ -52,7 +58,7 @@ export default function Home() {
                 OZAPTECHAMA
               </p>
               <p className="text-xs font-medium text-green-600">
-                Seu Assistente Financeiro
+                {TAGLINE_SHORT}
               </p>
             </div>
           </a>
@@ -80,16 +86,16 @@ export default function Home() {
                 <h1 className="text-5xl md:text-6xl font-bold leading-tight">
                   OZAPTECHAMA
                 </h1>
-                <p className="text-2xl text-green-300 font-bold">
-                  Seu Assistente Financeiro Direto no WhatsApp
+                <p className="text-xl text-green-300 font-bold sm:text-2xl">
+                  {TAGLINE}
                 </p>
               </div>
 
               <div className="space-y-4 bg-blue-800/90 p-6 rounded-2xl border border-green-400 shadow-2xl">
-                <p className="text-lg">✅ Controle seus ganhos, gastos e metas pelo WhatsApp</p>
-                <p className="text-lg">✅ Plano Padrão por apenas R$ 4,99/mês</p>
+                <p className="text-lg">✅ Finanças, gastos, metas e investimentos pelo WhatsApp</p>
+                <p className="text-lg">✅ Apoio nutricional e orientação comercial no mesmo assistente</p>
                 <p className="text-lg">✅ Plano Completo com FIPE, mercado financeiro e criptomoedas</p>
-                <p className="text-lg">✅ Pagamento por cartão de crédito ou Pix</p>
+                <p className="text-lg">✅ Plano Padrão a partir de R$ 4,99/mês • Pix ou cartão</p>
               </div>
 
               <div className="flex flex-col sm:flex-row gap-4">
@@ -119,7 +125,7 @@ export default function Home() {
               <div className="absolute -inset-3 rounded-[2rem] bg-gradient-to-br from-green-400/40 via-blue-500/20 to-transparent blur-2xl" />
               <div className="relative overflow-hidden rounded-[2rem] border border-white/15 bg-blue-950/50 p-3 shadow-2xl">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-2 text-xs font-bold text-green-200">
-                  <span className="rounded-full bg-white/10 px-3 py-1">WhatsApp financeiro</span>
+                  <span className="rounded-full bg-white/10 px-3 py-1">Assistente completo</span>
                   <span className="rounded-full bg-green-500 px-3 py-1 text-black">APP 100% brasileiro</span>
                 </div>
                 <img
@@ -153,7 +159,7 @@ export default function Home() {
             </div>
             <div className="bg-white/10 backdrop-blur text-white p-5 rounded-2xl border border-white/20">
               <p className="text-3xl">R$ {totalSavings.toLocaleString('pt-BR')}</p>
-              <p className="text-sm text-green-200">Em controle financeiro</p>
+              <p className="text-sm text-green-200">Em áreas organizadas</p>
             </div>
             <div className="bg-green-500 text-black p-5 rounded-2xl font-bold shadow-xl">
               <p className="text-3xl">{spotsLeft}</p>
@@ -222,7 +228,7 @@ export default function Home() {
                 <li>❌ Não sabe onde o dinheiro vai</li>
                 <li>❌ Dívidas acumuladas</li>
                 <li>❌ Preocupação constante</li>
-                <li>❌ Sem controle financeiro</li>
+                <li>❌ Sem apoio em finanças, nutrição e comércio</li>
                 <li>❌ Dinheiro nunca sobra</li>
               </ul>
             </div>
@@ -234,8 +240,8 @@ export default function Home() {
                 <li>✅ Visibilidade total de gastos</li>
                 <li>✅ Dívidas pagas</li>
                 <li>✅ Paz de espírito</li>
-                <li>✅ Controle financeiro completo</li>
-                <li>✅ Decisões financeiras mais claras</li>
+                <li>✅ Finanças, nutrição e comercial organizados</li>
+                <li>✅ Decisões mais claras em várias áreas</li>
               </ul>
             </div>
           </div>
@@ -249,7 +255,7 @@ export default function Home() {
             Clientes que já começaram 🏆
           </h2>
           <p className="text-center text-xl text-gray-600 mb-12">
-            Resultados possíveis quando o controle financeiro vira hábito.
+            Resultados possíveis quando finanças, nutrição e comércio ficam organizados no WhatsApp.
           </p>
 
           <div className="grid md:grid-cols-3 gap-8 mb-8">
@@ -286,7 +292,7 @@ export default function Home() {
       <section className="bg-white py-16 md:py-24">
         <div className="container mx-auto px-4">
           <h2 className="text-4xl md:text-5xl font-bold text-center mb-12">
-            Transforme sua vida financeira
+            Transforme sua rotina com inteligência
           </h2>
 
           <div className="bg-white border-2 border-blue-900 rounded-lg overflow-hidden">
@@ -312,7 +318,7 @@ export default function Home() {
                 <div className="text-4xl">💬</div>
                 <div>
                   <h3 className="text-2xl font-bold mb-2">Mensagens no WhatsApp</h3>
-                  <p>Receba seus dados financeiros direto no app que você já usa</p>
+                  <p>Receba respostas de finanças, nutrição, comercial e mais no app que você já usa</p>
                 </div>
               </div>
             </div>
@@ -359,10 +365,30 @@ export default function Home() {
 
             <div className="bg-blue-800 p-8 rounded-lg border-2 border-green-500">
               <div className="flex items-start gap-4">
+                <div className="text-4xl">🥗</div>
+                <div>
+                  <h3 className="text-2xl font-bold mb-2">Nutrição</h3>
+                  <p>Orientações e apoio nutricional personalizado pelo WhatsApp</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-blue-800 p-8 rounded-lg border-2 border-green-500">
+              <div className="flex items-start gap-4">
+                <div className="text-4xl">🏪</div>
+                <div>
+                  <h3 className="text-2xl font-bold mb-2">Comercial</h3>
+                  <p>Apoio para vendas, negócios e decisões comerciais do dia a dia</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-blue-800 p-8 rounded-lg border-2 border-green-500">
+              <div className="flex items-start gap-4">
                 <div className="text-4xl">📈</div>
                 <div>
                   <h3 className="text-2xl font-bold mb-2">Mercado e Criptomoedas</h3>
-                  <p>Acompanhe informações financeiras, moedas e criptoativos no Plano Completo</p>
+                  <p>Acompanhe mercado financeiro, moedas e criptoativos no Plano Completo</p>
                 </div>
               </div>
             </div>
@@ -390,8 +416,8 @@ export default function Home() {
             <div className="bg-white rounded-3xl border-2 border-blue-100 p-8 shadow-lg">
               <div className="mb-6">
                 <span className="bg-blue-100 text-blue-900 px-3 py-1 rounded-full text-sm font-bold">Plano Padrão</span>
-                <h3 className="text-3xl font-bold mt-4">Controle essencial</h3>
-                <p className="text-gray-600 mt-2">Para organizar o dinheiro do dia a dia sem pagar caro.</p>
+                <h3 className="text-3xl font-bold mt-4">Essencial multiáreas</h3>
+                <p className="text-gray-600 mt-2">Finanças, nutrição e comercial no WhatsApp, sem pagar caro.</p>
               </div>
 
               <div className="mb-6">
@@ -400,9 +426,9 @@ export default function Home() {
               </div>
 
               <ul className="space-y-3 text-gray-700 mb-8">
-                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Controle de ganhos e gastos pelo WhatsApp</li>
-                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Alertas e lembretes financeiros</li>
-                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Metas e acompanhamento básico</li>
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Finanças, nutrição e apoio comercial pelo WhatsApp</li>
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Alertas, metas e acompanhamento do dia a dia</li>
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Ideal para uso pessoal e profissional</li>
                 <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Sem busca de FIPE, mercado financeiro e criptomoedas</li>
               </ul>
 
@@ -420,8 +446,8 @@ export default function Home() {
 
               <div className="mb-6">
                 <span className="bg-green-500 text-black px-3 py-1 rounded-full text-sm font-bold">Plano Completo</span>
-                <h3 className="text-3xl font-bold mt-4">Finanças + consultas inteligentes</h3>
-                <p className="text-blue-100 mt-2">Para quem quer controlar dinheiro e consultar dados externos em um só lugar.</p>
+                <h3 className="text-3xl font-bold mt-4">Completo + mercado e FIPE</h3>
+                <p className="text-blue-100 mt-2">Tudo do Padrão, mais FIPE, mercado financeiro, criptomoedas e recursos avançados.</p>
               </div>
 
               <div className="mb-6">
@@ -471,7 +497,7 @@ export default function Home() {
                 <div className="text-4xl">🛡️</div>
                 <div>
                   <h3 className="text-2xl font-bold mb-2">Proteção em 1º Lugar</h3>
-                  <p className="text-gray-600">Seus dados financeiros são protegidos com a melhor criptografia disponível</p>
+                  <p className="text-gray-600">Seus dados são protegidos com criptografia de nível bancário</p>
                 </div>
               </div>
 
@@ -479,7 +505,7 @@ export default function Home() {
                 <div className="text-4xl">✅</div>
                 <div>
                   <h3 className="text-2xl font-bold mb-2">Confiança que Conta</h3>
-                  <p className="text-gray-600">Certificado e aprovado por especialistas em segurança financeira</p>
+                  <p className="text-gray-600">Certificado e aprovado por especialistas em segurança digital</p>
                 </div>
               </div>
 
@@ -522,7 +548,7 @@ export default function Home() {
               <summary className="font-bold text-lg text-blue-900">
                 📊 Qual a diferença entre os planos?
               </summary>
-              <p className="mt-4 text-gray-600">O Padrão foca no controle financeiro pelo WhatsApp. O Completo adiciona consultas à Tabela FIPE, dados de mercado financeiro e informações sobre criptomoedas.</p>
+              <p className="mt-4 text-gray-600">O Padrão cobre finanças, nutrição e comercial pelo WhatsApp. O Completo adiciona Tabela FIPE, mercado financeiro, criptomoedas e recursos avançados.</p>
             </details>
 
             <details className="bg-white p-6 rounded-lg border-2 border-blue-900 cursor-pointer">
@@ -569,11 +595,11 @@ export default function Home() {
           </div>
 
           <h2 className="text-4xl md:text-5xl font-bold mb-6">
-            Comece sua organização financeira agora
+            Comece com seu assistente completo agora
           </h2>
 
           <p className="text-xl text-green-300 mb-8 max-w-2xl mx-auto">
-            Escolha seu plano e tenha controle financeiro direto no WhatsApp.
+            {TAGLINE}
           </p>
 
           <div className="flex flex-col sm:flex-row gap-4 justify-center mb-8">
@@ -624,7 +650,7 @@ export default function Home() {
                 <img src="/logo-icon-light.svg" alt="OZAPTECHAMA" className="h-14 w-14 flex-shrink-0" />
                 <p className="font-extrabold text-xl text-white leading-tight">OZAPTECHAMA</p>
               </div>
-              <p className="text-sm text-gray-300">Seu assistente financeiro direto no WhatsApp.</p>
+              <p className="text-sm text-gray-300">{TAGLINE_FOOTER}</p>
             </div>
             <div>
               <h4 className="font-bold mb-4">Produto</h4>
