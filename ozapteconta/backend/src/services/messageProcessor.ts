@@ -1216,6 +1216,9 @@ function isBMRQuery(text: string): boolean {
 // ─── Detecção de Intenção Nutricional Ampla ────────────────────────────────────
 
 function isAmbiguousNutritionIntent(text: string, history: AIMessage[]): boolean {
+  // Se é uma query BMR direta, vai direto para o calculador — não mostra menu
+  if (isBMRQuery(text)) return false;
+
   const n = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
   // Se tem dados corporais suficientes, não é ambíguo — vai direto ao cálculo
@@ -1795,6 +1798,20 @@ export async function processText(phone: string, senderName: string | undefined,
       ? "🔒 Consulta FIPE disponível apenas no plano *Completo (R$ 9,90)*.\n\nNo plano básico você pode usar contas a pagar e a receber normalmente."
       : getFipeHelp();
   } else {
+    // ── Calculadora de Metabolismo/IMC (prioridade máxima — antes do menu) ──────
+    if (isBMRQuery(text) || isChoosingBMRFromMenu(text, history)) {
+      response = formatBMRResponse(text);
+
+      await saveContext(canonicalPhone, [
+        ...history,
+        { role: "user", content: text },
+        { role: "assistant", content: response },
+      ]);
+
+      await sendMessage(canonicalPhone, response);
+      return;
+    }
+
     // ── Menu inteligente de nutrição (intenção ambígua) ───────────────────────
     if (isAmbiguousNutritionIntent(text, history)) {
       response = getNutritionMenu();
@@ -1831,19 +1848,7 @@ export async function processText(phone: string, senderName: string | undefined,
       return;
     }
 
-    // ── Calculadora de Metabolismo/IMC ────────────────────────────────────────
-    if (isBMRQuery(text) || isChoosingBMRFromMenu(text, history)) {
-      response = formatBMRResponse(text);
-
-      await saveContext(canonicalPhone, [
-        ...history,
-        { role: "user", content: text },
-        { role: "assistant", content: response },
-      ]);
-
-      await sendMessage(canonicalPhone, response);
-      return;
-    }
+    // (isBMRQuery check moved above isAmbiguousNutritionIntent — see above)
 
     if (isNutritionQuery(text)) {
       await sendLoadingMessage(canonicalPhone, "nutrition_ai");
