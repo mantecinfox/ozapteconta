@@ -148,7 +148,7 @@ function normalizeModelForProvider(provider: string, model: string | null | unde
 
 async function ensureOllamaModelAvailable(baseUrl: string, model: string): Promise<void> {
   const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/api/tags`, {
-    signal: AbortSignal.timeout(8000),
+    signal: AbortSignal.timeout(20000),
   });
 
   if (!response.ok) {
@@ -519,7 +519,7 @@ async function callProvider(
     method: "POST",
     headers,
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(provider === "OLLAMA" || provider === "ABACUS" ? 90000 : 30000),
+    signal: AbortSignal.timeout(provider === "OLLAMA" ? 180000 : provider === "ABACUS" ? 90000 : 30000),
   });
 
   if (!response.ok) {
