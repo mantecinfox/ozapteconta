@@ -4,7 +4,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { config } from "../config";
 import { logger } from "../utils/logger";
-import { extractTransaction, extractTransactionFromAudio, analyzeNutrition, AIMessage } from "./aiService";
+import { extractTransaction, extractTransactionFromAudio, analyzeNutrition, generateDietPlan, AIMessage } from "./aiService";
 import { sendMessage, downloadMedia, formatCurrency, formatDate } from "./whatsappService";
 import { transcribeAudio } from "./transcriptionService";
 import { issueClientPortalAccess } from "./clientAccessService";
@@ -1213,6 +1213,75 @@ function isBMRQuery(text: string): boolean {
   return explicitBMR || implicitBMR;
 }
 
+// ─── Detecção de Intenção Nutricional Ampla ────────────────────────────────────
+
+function isAmbiguousNutritionIntent(text: string, history: AIMessage[]): boolean {
+  const n = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+  // Se tem dados corporais suficientes, não é ambíguo — vai direto ao cálculo
+  const hasBodyData = /(\d{2,3}\s*kg)|(\d[.,]\d{2}\s*m)|(\d{3}\s*cm)|(\d{1,2}\s*anos)/.test(n);
+  if (hasBodyData) return false;
+
+  // Se é alimento específico, não é ambíguo
+  const isSpecificFood = /\b(arroz|feijao|frango|ovo|banana|pao|queijo|leite|carne|peixe|batata|salada|aveia|iogurte|whey|pizza|chocolate|bolo|sushi|acai|tapioca|atum|salmao)\b/.test(n);
+  if (isSpecificFood) return false;
+
+  // Se está respondendo ao menu de nutrição, não é ambíguo
+  if (isRespondingToNutritionMenu(text, history)) return false;
+
+  // Intenção ambígua: saúde, peso, dieta de forma geral sem dados
+  return /\b(taxa basal|metabolismo|tmb|imc|indice de massa|emagrec|perder peso|ganhar massa|ganhar peso|quero emagrecer|quero ganhar|dieta|plano alimentar|cardapio|alimentacao saudavel|como comer|nutri|quero saber.*peso|quero saber.*caloria|quero saber.*dieta|organizar.*alimentacao|melhorar.*alimentacao|como.*perder|como.*ganhar|deficit calorico|calcular.*caloria|resultado.*treino|treino.*resultado|ajuda.*saude|saude.*alimentar|perder gordura|ganhar musculo|hipertrofia|emagrecer rapido|secar|definir corpo|shape|forma fisica)\b/.test(n);
+}
+
+function isRespondingToNutritionMenu(text: string, history: AIMessage[]): boolean {
+  if (!history.length) return false;
+  const lastBot = [...history].reverse().find(m => m.role === "assistant");
+  if (!lastBot) return false;
+  return lastBot.content.includes("NUTRIÇÃO E SAÚDE") ||
+         lastBot.content.includes("*Calcular minha Taxa Basal") ||
+         lastBot.content.includes("*Montar meu plano de dieta") ||
+         lastBot.content.includes("menu_nutricional");
+}
+
+function isDietPlanRequest(text: string, history: AIMessage[]): boolean {
+  const n = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const directDiet = /\b(plano alimentar|cardapio|dieta completa|monta.*dieta|quero.*dieta|preciso.*dieta|me.*da.*dieta|plano.*dieta|dieta.*personalizada|o que comer|o que devo comer|refeicao.*dia|montar.*cardapio|quero um cardapio)\b/.test(n);
+  if (directDiet) return true;
+
+  // Respondendo ao menu com opção de dieta
+  if (isRespondingToNutritionMenu(text, history)) {
+    return /\b(2|dieta|plano|montar|cardapio|os dois|ambos|tudo|completo|junto|3)\b/.test(n);
+  }
+  return false;
+}
+
+function isChoosingBMRFromMenu(text: string, history: AIMessage[]): boolean {
+  if (!isRespondingToNutritionMenu(text, history)) return false;
+  const n = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  return /\b(1|calcular|tmb|imc|metabolismo|taxa|basal)\b/.test(n);
+}
+
+function getNutritionMenu(): string {
+  return (
+    `🍏 *NUTRIÇÃO E SAÚDE — Como posso te ajudar?*\n` +
+    `━━━━━━━━━━━━━━━━\n\n` +
+    `*📊 Calcular minha Taxa Basal (TMB/IMC)*\n` +
+    `→ Descubro quantas calorias seu corpo gasta por dia, calculo seu IMC, metas de emagrecimento e ganho de massa com precisão\n\n` +
+    `*🥗 Montar meu plano de dieta completo*\n` +
+    `→ Crio um cardápio personalizado com café da manhã, almoço, jantar e lanches — com base no seu objetivo e tipo de treino\n\n` +
+    `*💪 Os dois juntos*\n` +
+    `→ Calculo seu metabolismo E monto seu plano alimentar completo de uma vez só\n\n` +
+    `━━━━━━━━━━━━━━━━\n` +
+    `Responda:\n` +
+    `• _"calcular"_ → TMB e IMC\n` +
+    `• _"dieta"_ → plano alimentar\n` +
+    `• _"completo"_ → os dois\n\n` +
+    `Ou me conta direto:\n` +
+    `_"Sou homem, 82kg, 1,78m, 32 anos, musculação 4x, quero emagrecer"_ 💬\n` +
+    `━━━━━━━━━━━━━━━━`
+  );
+}
+
 function getNutritionClarificationPrompt(text: string): string | null {
   const normalized = text
     .normalize("NFD")
@@ -1686,8 +1755,43 @@ export async function processText(phone: string, senderName: string | undefined,
       ? "🔒 Consulta FIPE disponível apenas no plano *Completo (R$ 9,90)*.\n\nNo plano básico você pode usar contas a pagar e a receber normalmente."
       : getFipeHelp();
   } else {
-    // ── Calculadora de Metabolismo/IMC (antes da IA) ─────────────────────────
-    if (isBMRQuery(text)) {
+    // ── Menu inteligente de nutrição (intenção ambígua) ───────────────────────
+    if (isAmbiguousNutritionIntent(text, history)) {
+      response = getNutritionMenu();
+
+      await saveContext(canonicalPhone, [
+        ...history,
+        { role: "user", content: text },
+        { role: "assistant", content: response },
+      ]);
+
+      await sendMessage(canonicalPhone, response);
+      return;
+    }
+
+    // ── Plano de Dieta Completo via IA ────────────────────────────────────────
+    if (isDietPlanRequest(text, history)) {
+      response =
+        (await generateDietPlan(text, history)) ??
+        `🥗 Para montar seu plano alimentar ideal, me diz:\n\n` +
+        `• 🎯 *Objetivo:* emagrecer, manter ou ganhar massa?\n` +
+        `• ⚖️ *Peso e altura?*\n` +
+        `• 🏋️ *Pratica exercício?* (tipo e frequência)\n` +
+        `• 🚫 *Tem restrição alimentar?* (ex: sem glúten, vegetariano)\n\n` +
+        `Exemplo: _"Sou mulher, 68kg, 1,65m, quero emagrecer, faço caminhada 3x"_`;
+
+      await saveContext(canonicalPhone, [
+        ...history,
+        { role: "user", content: text },
+        { role: "assistant", content: response },
+      ]);
+
+      await sendMessage(canonicalPhone, response);
+      return;
+    }
+
+    // ── Calculadora de Metabolismo/IMC ────────────────────────────────────────
+    if (isBMRQuery(text) || isChoosingBMRFromMenu(text, history)) {
       response = formatBMRResponse(text);
 
       await saveContext(canonicalPhone, [

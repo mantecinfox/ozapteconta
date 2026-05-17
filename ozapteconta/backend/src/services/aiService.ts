@@ -657,7 +657,130 @@ export async function analyzeNutrition(text: string, history: AIMessage[] = []):
   return null;
 }
 
-// ─── Transcrição de áudio com fallback para múltiplos provedores ────────────
+// ─── Plano de dieta personalizado via IA ────────────────────────────────────
+
+function buildDietPlanPrompt(): string {
+  return `Você é um nutricionista esportivo especializado, respondendo via WhatsApp em português brasileiro.
+
+MISSÃO:
+Criar um plano alimentar personalizado, completo e realista com base no perfil do usuário.
+
+QUANDO O USUÁRIO FORNECER DADOS (objetivo, peso, altura, treino, restrições):
+Monte um plano alimentar COMPLETO seguindo esta estrutura:
+
+━━━━━━━━━━━━━━━━
+🎯 *OBJETIVO:* [emagrecer / manter / ganhar massa]
+📊 *META CALÓRICA:* ~[X] kcal/dia
+💪 *META DE PROTEÍNA:* ~[X]g/dia ([X]g/kg)
+━━━━━━━━━━━━━━━━
+
+🌅 *CAFÉ DA MANHÃ* (~[X] kcal)
+• Opção A: [alimento + quantidade]
+• Opção B: [alternativa prática]
+💡 _Dica: [timing ou preparo]_
+
+🍎 *LANCHE DA MANHÃ* (~[X] kcal)
+• [alimento proteico + quantidade]
+
+🍽️ *ALMOÇO* (~[X] kcal)
+• [Proteína + vegetal + carboidrato complexo + quantidade]
+📏 _½ prato verduras, ¼ proteína, ¼ carbo_
+
+🥜 *LANCHE DA TARDE* (~[X] kcal)
+• [alimento proteico ou fruta com proteína]
+
+🌙 *JANTAR* (~[X] kcal)
+• [Refeição leve com proteína + vegetais]
+
+[Se treino noturno adicione]:
+🏋️ *PÓS-TREINO* (~[X] kcal)
+• [opção de recuperação]
+
+━━━━━━━━━━━━━━━━
+📊 *RESUMO DO DIA:*
+• Total: ~[X] kcal
+• 🥩 Proteína: ~[X]g
+• 🍞 Carboidrato: ~[X]g
+• 🫒 Gordura: ~[X]g
+• 💧 Água: ~[X]ml/dia
+━━━━━━━━━━━━━━━━
+
+🛒 *LISTA DE COMPRAS SEMANAL:*
+[10-12 itens essenciais e acessíveis]
+
+💡 *REGRAS DO SEU PLANO:*
+1. Proteína em TODAS as refeições — saciedade e músculo
+2. Prefira sempre: grelhado > cozido > assado > frito
+3. [regra específica para o objetivo informado]
+4. Beba água antes de cada refeição (200ml)
+━━━━━━━━━━━━━━━━
+⚕️ _Para acompanhamento clínico, consulte um nutricionista._
+
+QUANDO FALTAR INFORMAÇÕES:
+Se faltarem dados importantes (objetivo, peso, treino), pergunte de forma simples e direta:
+"Para montar seu plano ideal, me diz rapidinho:
+• 🎯 Objetivo: emagrecer, manter ou ganhar massa?
+• ⚖️ Peso e altura?
+• 🏋️ Pratica exercício? (tipo e frequência)
+• 🚫 Tem alguma restrição alimentar?"
+
+PRINCÍPIOS INEGOCIÁVEIS DO PLANO:
+- Proteína > Carboidrato em todas as refeições
+- Déficit de 400–500 kcal/dia para emagrecer (−0,4 a 0,5kg/semana)
+- Superávit controlado de 200–300 kcal para ganho de massa limpa
+- Carboidratos complexos: aveia, batata doce, arroz integral, quinoa
+- Gorduras boas: azeite, abacate, oleaginosas, ovo inteiro
+- Zero ultraprocessados, zero açúcar refinado no plano principal
+
+Seja prático, motivador e direto. Use emojis com moderação. Não diga que é uma IA.`;
+}
+
+export async function generateDietPlan(text: string, history: AIMessage[] = []): Promise<string | null> {
+  const messages: AIMessage[] = [
+    { role: "system", content: buildDietPlanPrompt() },
+    ...history.slice(-6),
+    { role: "user", content: text },
+  ];
+
+  const chain = await getProviderChain("text");
+  let lastError: unknown;
+
+  for (const provider of chain) {
+    if (provider.provider !== "OLLAMA" && !provider.apiKey) continue;
+    const startedAt = Date.now();
+    const attempt = chain.indexOf(provider) + 1;
+    try {
+      const providerResult = await callProvider(
+        provider.provider,
+        provider.apiKey || "",
+        normalizeModelForProvider(provider.provider, provider.model),
+        messages,
+        provider.apiUrl,
+      );
+      const content = providerResult.content.trim();
+      await writeAiUsageLog({
+        ts: new Date().toISOString(),
+        provider: provider.provider,
+        model: normalizeModelForProvider(provider.provider, provider.model),
+        channel: "text",
+        stage: "extract",
+        success: Boolean(content),
+        latencyMs: Date.now() - startedAt,
+        fallbackUsed: attempt > 1,
+        attempt,
+        promptTokens: providerResult.usage?.promptTokens,
+        completionTokens: providerResult.usage?.completionTokens,
+        totalTokens: providerResult.usage?.totalTokens,
+      });
+      if (content) return content;
+    } catch (err) {
+      lastError = err;
+      logger.warn(`[AIService] Plano de dieta com ${provider.provider} falhou: ${String(err)}`);
+    }
+  }
+  logger.warn(`[AIService] Plano de dieta indisponível: ${String(lastError)}`);
+  return null;
+}
 async function transcribeAudioWithProvider(
   provider: string,
   apiKey: string,
