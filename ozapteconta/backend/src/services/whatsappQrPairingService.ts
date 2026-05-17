@@ -64,6 +64,8 @@ class WhatsappQrPairingService {
     const key = this.unreadableTimerKey(accountId, messageId);
     this.clearUnreadableFollowUp(accountId, messageId);
 
+    // Aguarda 8s antes de enviar aviso — WhatsApp frequentemente reenvia a mensagem
+    // completa dentro desse prazo (protocolo multi-device: "append" antes do "notify").
     const timer = setTimeout(async () => {
       this.unreadableMessageTimers.delete(key);
       if (!this.shouldSendUnreadableNotice(remoteJid)) return;
@@ -72,14 +74,13 @@ class WhatsappQrPairingService {
         const session = this.sessions.get(accountId);
         await session?.sock.sendMessage(remoteJid, {
           text:
-            "Entendi que sua mensagem pode ter vindo em um formato que eu nao consegui ler aqui. " +
-            "Vou tentar interpretar melhor agora.\n\n" +
-            "Se ainda assim eu nao conseguir, me desculpe. Pode reenviar em texto simples e eu respondo corretamente.",
+            "Oi! 👋 Recebi sua mensagem mas não consegui ler o conteúdo.\n\n" +
+            "Pode reenviar em *texto simples*? Assim consigo te responder corretamente! 😊",
         });
       } catch (replyErr) {
         logger.warn(`[WPP QR] Falha ao enviar aviso de mensagem ilegível (${remoteJid}): ${String(replyErr)}`);
       }
-    }, 2200);
+    }, 8000);
 
     this.unreadableMessageTimers.set(key, timer);
   }
