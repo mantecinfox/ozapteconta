@@ -35,7 +35,7 @@ export default function Home() {
       <header className="sticky top-0 z-50 bg-white text-gray-900 border-b-4 border-green-500 shadow-md">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <img src="/logo-ozaptechama.svg" alt="OZAPTECHAMA Logo" className="h-16 w-auto" />
+            <img src="/logo-ozaptechama.svg" alt="OZAPTECHAMA Logo" className="h-20 w-auto" />
             <div className="hidden sm:block">
               <span className="font-bold text-lg text-gray-900">OZAPTECHAMA</span>
               <p className="text-xs text-green-600 font-semibold">Seu Assistente Financeiro</p>
@@ -603,7 +603,7 @@ export default function Home() {
           <div className="grid md:grid-cols-4 gap-8 mb-8">
             <div>
               <div className="flex items-center gap-2 mb-3">
-              <img src="/logo-ozaptechama.svg" alt="OZAPTECHAMA" className="h-12 w-auto" />
+                <img src="/logo-ozaptechama.svg" alt="OZAPTECHAMA" className="h-14 w-auto" />
               </div>
               <p className="text-sm text-gray-300">Seu assistente financeiro direto no WhatsApp.</p>
             </div>
