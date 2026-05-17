@@ -33,18 +33,31 @@ export default function Home() {
     <div className="min-h-screen bg-white text-black">
       {/* Header Sticky com Urgência */}
       <header className="sticky top-0 z-50 bg-white text-gray-900 border-b-4 border-green-500 shadow-md">
-        <div className="container mx-auto px-4 py-3 flex items-center justify-between">
-          {/* Logo ícone */}
-          <div className="flex items-center">
-            <img src="/logo-icon.svg" alt="OZAPTECHAMA" className="h-14 w-14 flex-shrink-0" />
-          </div>
+        <div className="container mx-auto px-4 py-3">
+          <div className="relative flex min-h-14 items-center">
+            <a href="/" className="relative z-10 flex shrink-0 items-center" aria-label="OZAPTECHAMA - início">
+              <img src="/logo-icon.svg" alt="" className="h-14 w-14" />
+            </a>
 
-          {/* Botões à Direita */}
-          <div className="hidden md:flex gap-3 text-sm items-center">
-            <span className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-bold border border-green-300">PIX OU CARTÃO</span>
-            <Button className="bg-green-500 hover:bg-green-600 text-white font-bold">
-              VER PLANOS
-            </Button>
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-16 sm:px-24 md:px-56">
+              <div className="text-center">
+                <p className="text-lg font-extrabold leading-tight tracking-tight text-gray-900 sm:text-xl">
+                  OZAPTECHAMA
+                </p>
+                <p className="text-xs font-semibold text-green-600 sm:text-sm">
+                  Seu Assistente Financeiro
+                </p>
+              </div>
+            </div>
+
+            <div className="relative z-10 ml-auto hidden items-center gap-3 text-sm md:flex">
+              <span className="rounded-full border border-green-300 bg-green-100 px-3 py-1 text-xs font-bold text-green-700">
+                PIX OU CARTÃO
+              </span>
+              <Button className="bg-green-500 font-bold text-white hover:bg-green-600">
+                VER PLANOS
+              </Button>
+            </div>
           </div>
         </div>
       </header>
