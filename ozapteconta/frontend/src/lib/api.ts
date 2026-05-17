@@ -122,6 +122,7 @@ export interface AiProvider {
   model: string | null;
   enabled: boolean;
   isDefault: boolean;
+  isAudioDefault: boolean;
 }
 
 export interface AudioModelChainSettings {

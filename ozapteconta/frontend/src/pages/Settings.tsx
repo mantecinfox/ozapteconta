@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  MessageSquare, Bot, CheckCircle2, XCircle, Loader2,
-  Eye, EyeOff, Save, TestTube2, Bell, Play, CreditCard, ShieldCheck, PowerOff, Plus, X,
+  MessageSquare, Bot, CheckCircle2, XCircle,
+  Eye, EyeOff, Save, TestTube2, Bell, Play, CreditCard, PowerOff, Plus, X, Mic,
 } from "lucide-react";
 import api, { AiProvider, AudioModelChainSettings } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle, Badge, Button, Input } from "@/components/ui";
@@ -22,16 +22,26 @@ interface PaymentGatewayConfigView {
   maxRetries: number;
 }
 
-const PROVIDER_INFO: Record<string, { color: string; desc: string; models: string[] }> = {
-  OPENAI: { color: "bg-green-500/10 text-green-400", desc: "ChatGPT — Excelente qualidade", models: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"] },
-  GEMINI: { color: "bg-purple-500/10 text-purple-400", desc: "Google Gemini — Rápido e preciso", models: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"] },
-  GROQ: { color: "bg-orange-500/10 text-orange-400", desc: "Groq — Ultra rápido (LLaMA)", models: ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "gemma2-9b-it"] },
-  GROK: { color: "bg-red-500/10 text-red-400", desc: "Grok (xAI) — Modelo da X/Twitter", models: ["grok-2-latest", "grok-3", "grok-3-mini"] },
-  OLLAMA: { color: "bg-yellow-500/10 text-yellow-400", desc: "Ollama — Modelos locais (sem custo)", models: ["hermes3:8b", "qwen2.5:7b", "mistral:7b", "llama3"] },
-  ABACUS: { color: "bg-cyan-500/10 text-cyan-400", desc: "Abacus AI — RouteLLM", models: ["gpt-4o-mini", "gpt-4o", "claude-3-5-sonnet"] },
+const PROVIDER_INFO: Record<string, { color: string; desc: string; models: string[]; supportsAudio: boolean }> = {
+  OPENAI:  { color: "bg-green-500/10 text-green-400",  desc: "ChatGPT — Excelente qualidade",       models: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"],                          supportsAudio: true  },
+  GEMINI:  { color: "bg-purple-500/10 text-purple-400", desc: "Google Gemini — Rápido e preciso",    models: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],          supportsAudio: true  },
+  GROQ:    { color: "bg-orange-500/10 text-orange-400", desc: "Groq — Ultra rápido (LLaMA)",         models: ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "gemma2-9b-it"], supportsAudio: true  },
+  GROK:    { color: "bg-red-500/10 text-red-400",       desc: "Grok (xAI) — Modelo da X/Twitter",   models: ["grok-2-latest", "grok-3", "grok-3-mini"],                           supportsAudio: false },
+  OLLAMA:  { color: "bg-yellow-500/10 text-yellow-400", desc: "Ollama — Modelos locais (sem custo)", models: ["hermes3:8b", "qwen2.5:7b", "mistral:7b", "llama3"],                 supportsAudio: true  },
+  ABACUS:  { color: "bg-cyan-500/10 text-cyan-400",     desc: "Abacus AI — RouteLLM",               models: ["gpt-4o-mini", "gpt-4o", "claude-3-5-sonnet"],                      supportsAudio: true  },
 };
 
-function ProviderCard({ provider, onSave }: { provider: AiProvider; onSave: () => void }) {
+function ProviderCard({
+  provider,
+  textOrder,
+  audioOrder,
+  onSave,
+}: {
+  provider: AiProvider;
+  textOrder?: number;
+  audioOrder?: number;
+  onSave: () => void;
+}) {
   const [apiKey, setApiKey] = useState(provider.apiKey || "");
   const [model, setModel] = useState(provider.model || "");
   const [apiUrl, setApiUrl] = useState(provider.apiUrl || "");
@@ -40,7 +50,7 @@ function ProviderCard({ provider, onSave }: { provider: AiProvider; onSave: () =
   const [testing, setTesting] = useState(false);
   const qc = useQueryClient();
 
-  const info = PROVIDER_INFO[provider.provider] || { color: "bg-muted text-muted-foreground", desc: "", models: [] };
+  const info = PROVIDER_INFO[provider.provider] || { color: "bg-muted text-muted-foreground", desc: "", models: [], supportsAudio: false };
 
   const saveMutation = useMutation({
     mutationFn: (data: Partial<AiProvider>) =>
@@ -68,62 +78,81 @@ function ProviderCard({ provider, onSave }: { provider: AiProvider; onSave: () =
     }
   };
 
+  // Border color: gold=text-default, green=audio-default, cyan=fallback, gray=inactive
+  const borderClass = provider.isDefault
+    ? "border-primary/50"
+    : provider.isAudioDefault
+    ? "border-green-500/40"
+    : provider.enabled
+    ? "border-blue-500/30"
+    : "border-border/50";
+
   return (
-    <Card className={`border ${provider.isDefault ? "border-primary/40" : "border-border/50"}`}>
-      <CardContent className="p-5">
-        <div className="flex items-start justify-between mb-4">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <span className={`px-2 py-0.5 rounded text-xs font-medium ${info.color}`}>
-                {provider.provider}
-              </span>
-              {provider.isDefault && <Badge variant="default">Padrão</Badge>}
-              {provider.enabled && !provider.isDefault && <Badge variant="outline" className="border-cyan-500/50 text-cyan-400">Fallback</Badge>}
-            </div>
-            <h3 className="font-semibold text-foreground">{provider.displayName}</h3>
-            <p className="text-xs text-muted-foreground mt-0.5">{info.desc}</p>
+    <Card className={`border ${borderClass}`}>
+      <CardContent className="p-5 space-y-4">
+
+        {/* ── Header ── */}
+        <div>
+          <div className="flex items-center gap-1.5 flex-wrap mb-1">
+            <span className={`px-2 py-0.5 rounded text-xs font-semibold ${info.color}`}>
+              {provider.provider}
+            </span>
+            {/* Text-priority badge */}
+            {provider.isDefault && (
+              <Badge variant="default" className="gap-1 text-xs">
+                <MessageSquare className="w-2.5 h-2.5" /> Texto 1º
+              </Badge>
+            )}
+            {provider.enabled && !provider.isDefault && textOrder && (
+              <Badge variant="outline" className="border-blue-500/40 text-blue-400 gap-1 text-xs">
+                <MessageSquare className="w-2.5 h-2.5" /> Texto {textOrder}º
+              </Badge>
+            )}
+            {/* Audio-priority badge */}
+            {provider.isAudioDefault && (
+              <Badge variant="outline" className="border-green-500/40 text-green-400 gap-1 text-xs">
+                <Mic className="w-2.5 h-2.5" /> Áudio {audioOrder ? `${audioOrder}º` : "Padrão"}
+              </Badge>
+            )}
           </div>
+          <h3 className="font-semibold text-foreground">{provider.displayName}</h3>
+          <p className="text-xs text-muted-foreground">{info.desc}</p>
         </div>
 
-        <div className="space-y-3">
-          {(true) && (
-            <>
-              {provider.provider !== "OLLAMA" && (
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">API Key</label>
-                  <div className="relative">
-                    <input
-                      type={showKey ? "text" : "password"}
-                      value={apiKey}
-                      onChange={(e) => setApiKey(e.target.value)}
-                      placeholder="sk-..."
-                      className="flex h-9 w-full rounded-lg border border-input bg-secondary/50 px-3 pr-9 py-2 text-sm font-mono placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring transition-colors"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowKey(!showKey)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    >
-                      {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {provider.provider === "OLLAMA" && (
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">URL Base</label>
-                  <input
-                    value={apiUrl}
-                    onChange={(e) => setApiUrl(e.target.value)}
-                    placeholder="http://localhost:11434"
-                    className="flex h-9 w-full rounded-lg border border-input bg-secondary/50 px-3 py-2 text-sm font-mono placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring transition-colors"
-                  />
-                </div>
-              )}
-            </>
+        {/* ── Credentials ── */}
+        <div className="space-y-2">
+          {provider.provider !== "OLLAMA" && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">API Key</label>
+              <div className="relative">
+                <input
+                  type={showKey ? "text" : "password"}
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="sk-..."
+                  className="flex h-9 w-full rounded-lg border border-input bg-secondary/50 px-3 pr-9 py-2 text-sm font-mono placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring transition-colors"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowKey(!showKey)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
           )}
-
+          {provider.provider === "OLLAMA" && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">URL Base</label>
+              <input
+                value={apiUrl}
+                onChange={(e) => setApiUrl(e.target.value)}
+                placeholder="http://localhost:11434"
+                className="flex h-9 w-full rounded-lg border border-input bg-secondary/50 px-3 py-2 text-sm font-mono placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring transition-colors"
+              />
+            </div>
+          )}
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-muted-foreground">Modelo</label>
             <input
@@ -137,76 +166,157 @@ function ProviderCard({ provider, onSave }: { provider: AiProvider; onSave: () =
               {info.models.map((m) => <option key={m} value={m} />)}
             </datalist>
           </div>
+        </div>
 
-          {testResult && (
-            <div className={`flex items-start gap-2 p-2.5 rounded-lg text-xs ${
-              testResult.ok ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"
-            }`}>
-              {testResult.ok ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" /> : <XCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />}
-              {testResult.message}
+        {/* ── Test result ── */}
+        {testResult && (
+          <div className={`flex items-start gap-2 p-2.5 rounded-lg text-xs ${
+            testResult.ok ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"
+          }`}>
+            {testResult.ok ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" /> : <XCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />}
+            {testResult.message}
+          </div>
+        )}
+
+        {/* ── Test + Save config ── */}
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1"
+            loading={testing}
+            onClick={handleTest}
+            disabled={provider.provider !== "OLLAMA" && !apiKey}
+          >
+            <TestTube2 className="w-3.5 h-3.5" />
+            Testar
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1"
+            loading={saveMutation.isPending}
+            onClick={() => saveMutation.mutate({
+              apiKey: apiKey && !apiKey.includes("...") ? apiKey : undefined,
+              model,
+              apiUrl: apiUrl || undefined,
+            })}
+          >
+            <Save className="w-3.5 h-3.5" />
+            Salvar Config
+          </Button>
+        </div>
+
+        {/* ── Priority section ── */}
+        <div className="border-t border-border/50 pt-3 grid grid-cols-2 gap-3">
+
+          {/* TEXT column */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-1 text-xs font-semibold text-foreground">
+              <MessageSquare className="w-3 h-3" /> Texto
             </div>
-          )}
+            <div className="text-xs text-muted-foreground">
+              {provider.isDefault ? (
+                <span className="text-primary font-medium">★ 1º Padrão</span>
+              ) : provider.enabled ? (
+                <span className="text-blue-400">Fallback #{textOrder}</span>
+              ) : (
+                <span>Inativo</span>
+              )}
+            </div>
+            <div className="space-y-1">
+              {!provider.isDefault && (
+                <Button
+                  size="sm"
+                  className="w-full text-xs h-7"
+                  loading={saveMutation.isPending}
+                  onClick={() => saveMutation.mutate({ isDefault: true, enabled: true })}
+                >
+                  ★ Definir 1º
+                </Button>
+              )}
+              {!provider.enabled && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full text-xs h-7 border-blue-500/40 text-blue-400 hover:bg-blue-500/10"
+                  loading={saveMutation.isPending}
+                  onClick={() => saveMutation.mutate({ enabled: true, isDefault: false })}
+                >
+                  + Ativar Fallback
+                </Button>
+              )}
+              {provider.enabled && !provider.isDefault && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full text-xs h-7 border-destructive/40 text-destructive hover:bg-destructive/10"
+                  loading={saveMutation.isPending}
+                  onClick={() => saveMutation.mutate({ enabled: false, isDefault: false })}
+                >
+                  <PowerOff className="w-3 h-3" /> Desativar
+                </Button>
+              )}
+              {provider.isDefault && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full text-xs h-7"
+                  loading={saveMutation.isPending}
+                  onClick={() => saveMutation.mutate({ isDefault: false, enabled: true })}
+                >
+                  ↓ Rebaixar Fallback
+                </Button>
+              )}
+            </div>
+          </div>
 
-          <div className="flex gap-2 pt-1">
-            <Button
-              variant="outline"
-              size="sm"
-              className="flex-1"
-              loading={testing}
-              onClick={handleTest}
-              disabled={provider.provider !== "OLLAMA" && !apiKey}
-            >
-              <TestTube2 className="w-3.5 h-3.5" />
-              Testar
-            </Button>
-            <Button
-              size="sm"
-              className="flex-1"
-              loading={saveMutation.isPending}
-              onClick={() => saveMutation.mutate({
-                apiKey: apiKey && !apiKey.includes("...") ? apiKey : undefined,
-                model,
-                apiUrl: apiUrl || undefined,
-                enabled: true,
-                isDefault: true,
-              })}
-            >
-              <Save className="w-3.5 h-3.5" />
-              Definir Padrão
-            </Button>
-          </div>
-          <div className="flex gap-2">
-            {!provider.enabled && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="flex-1 border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/10"
-                loading={saveMutation.isPending}
-                onClick={() => saveMutation.mutate({
-                  apiKey: apiKey && !apiKey.includes("...") ? apiKey : undefined,
-                  model,
-                  apiUrl: apiUrl || undefined,
-                  enabled: true,
-                  isDefault: false,
-                })}
-              >
-                <ShieldCheck className="w-3.5 h-3.5" />
-                Ativar Fallback
-              </Button>
-            )}
-            {provider.enabled && !provider.isDefault && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="flex-1 border-destructive/40 text-destructive hover:bg-destructive/10"
-                loading={saveMutation.isPending}
-                onClick={() => saveMutation.mutate({ enabled: false, isDefault: false })}
-              >
-                <PowerOff className="w-3.5 h-3.5" />
-                Desativar
-              </Button>
+          {/* AUDIO column */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-1 text-xs font-semibold text-foreground">
+              <Mic className="w-3 h-3" /> Áudio
+            </div>
+            {info.supportsAudio ? (
+              <>
+                <div className="text-xs text-muted-foreground">
+                  {provider.isAudioDefault ? (
+                    <span className="text-green-400 font-medium">★ Padrão</span>
+                  ) : (
+                    <span>Inativo</span>
+                  )}
+                </div>
+                <div className="space-y-1">
+                  {!provider.isAudioDefault && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full text-xs h-7 border-green-500/40 text-green-400 hover:bg-green-500/10"
+                      loading={saveMutation.isPending}
+                      onClick={() => saveMutation.mutate({ isAudioDefault: true })}
+                    >
+                      <Mic className="w-3 h-3" /> Definir Padrão
+                    </Button>
+                  )}
+                  {provider.isAudioDefault && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full text-xs h-7 border-destructive/40 text-destructive hover:bg-destructive/10"
+                      loading={saveMutation.isPending}
+                      onClick={() => saveMutation.mutate({ isAudioDefault: false })}
+                    >
+                      <PowerOff className="w-3 h-3" /> Remover
+                    </Button>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="text-xs text-muted-foreground/50 flex items-center gap-1 pt-1">
+                <XCircle className="w-3 h-3" /> Sem suporte
+              </div>
             )}
           </div>
+
         </div>
       </CardContent>
     </Card>
@@ -610,22 +720,44 @@ export default function Settings() {
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {providers.map((p) => (
-            <ProviderCard
-              key={p.provider}
-              provider={p}
-              onSave={() => { setToast(`${p.displayName} definido como padrão!`); setTimeout(() => setToast(""), 3000); }}
-            />
-          ))}
+          {(() => {
+            // Compute text ordering: isDefault=1st, then enabled fallbacks by id
+            const textOrdered = [...providers]
+              .filter((p) => p.isDefault || p.enabled)
+              .sort((a, b) => {
+                if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
+                return a.id - b.id;
+              });
+            const textOrderMap: Record<string, number> = {};
+            textOrdered.forEach((p, i) => { textOrderMap[p.provider] = i + 1; });
+
+            // Compute audio ordering: isAudioDefault providers by id
+            const audioOrdered = [...providers].filter((p) => p.isAudioDefault).sort((a, b) => a.id - b.id);
+            const audioOrderMap: Record<string, number> = {};
+            audioOrdered.forEach((p, i) => { audioOrderMap[p.provider] = i + 1; });
+
+            return providers.map((p) => (
+              <ProviderCard
+                key={p.provider}
+                provider={p}
+                textOrder={textOrderMap[p.provider]}
+                audioOrder={audioOrderMap[p.provider]}
+                onSave={() => { setToast(`${p.displayName} atualizado!`); setTimeout(() => setToast(""), 3000); }}
+              />
+            ));
+          })()}
         </div>
 
         <Card className="mt-4 border border-border/50">
           <CardHeader>
-            <CardTitle>Fallback de Voz (ABACUS)</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <Mic className="w-4 h-4 text-green-400" />
+              Ordem dos Modelos de Áudio
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              Defina a ordem dos modelos usados na transcricao de audio. Se um falhar, o sistema tenta o proximo automaticamente.
+              Sequência de modelos ABACUS usados na transcrição de áudio. Se o 1º falhar, tenta o próximo automaticamente.
             </p>
 
             {(audioChainData?.allowedModels || []).length > 0 && audioChainForm.length > 0 && (

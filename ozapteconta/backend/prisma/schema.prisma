@@ -164,9 +164,10 @@ model AiProviderConfig {
   apiKey      String?      @db.Text
   apiUrl      String?
   model       String?
-  enabled     Boolean      @default(false)
-  isDefault   Boolean      @default(false)
-  extraConfig Json?
+  enabled        Boolean      @default(false)
+  isDefault      Boolean      @default(false)
+  isAudioDefault Boolean      @default(false)
+  extraConfig    Json?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 

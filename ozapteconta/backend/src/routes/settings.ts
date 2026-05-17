@@ -102,8 +102,8 @@ router.get("/ai-providers", async (_req: Request, res: Response) => {
 
 router.put("/ai-providers/:provider", async (req: Request, res: Response) => {
   const provider = String(req.params.provider || "");
-  const { apiKey, model, apiUrl, enabled, isDefault } = req.body as {
-    apiKey?: string; model?: string; apiUrl?: string; enabled?: boolean; isDefault?: boolean;
+  const { apiKey, model, apiUrl, enabled, isDefault, isAudioDefault } = req.body as {
+    apiKey?: string; model?: string; apiUrl?: string; enabled?: boolean; isDefault?: boolean; isAudioDefault?: boolean;
   };
 
   try {
@@ -119,6 +119,16 @@ router.put("/ai-providers/:provider", async (req: Request, res: Response) => {
         await prisma.aiProviderConfig.updateMany({
           where: { provider: { not: provider as "BUILTIN" | "OPENAI" | "GEMINI" | "GROQ" | "GROK" | "OLLAMA" | "ABACUS" } },
           data: { isDefault: false },
+        });
+      }
+    }
+    if (isAudioDefault !== undefined) {
+      data.isAudioDefault = isAudioDefault;
+      // Remove padrão de áudio de outros provedores
+      if (isAudioDefault) {
+        await prisma.aiProviderConfig.updateMany({
+          where: { provider: { not: provider as "BUILTIN" | "OPENAI" | "GEMINI" | "GROQ" | "GROK" | "OLLAMA" | "ABACUS" } },
+          data: { isAudioDefault: false },
         });
       }
     }
