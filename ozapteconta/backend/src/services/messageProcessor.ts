@@ -1155,10 +1155,15 @@ function formatBMRResponse(text: string): string {
     if (!metrics.altura)  missing.push("• 📏 *Altura* — ex: 1,72m ou 172cm");
     if (!metrics.idade)   missing.push("• 🎂 *Idade* — ex: 28 anos");
 
-    return `🧮 *Calculadora de Metabolismo Basal (TMB)*\n\n` +
-      `Para calcular seu metabolismo com precisão, preciso de:\n${missing.join("\n")}\n\n` +
-      `*Atividade física (opcional):*\n• sedentário, 1–2x/semana, 3–4x/semana, 5–6x/semana, todo dia\n\n` +
-      `📝 Exemplo: _"Sou mulher, 65kg, 1,62m, 27 anos, treino musculação 4x por semana, quero emagrecer"_`;
+    return `🧮 *Calculadora de Taxa Basal (TMB)*\n\n` +
+      `Sim! Posso calcular sua taxa metabólica basal 💪\n\n` +
+      `Me manda em uma mensagem só:\n` +
+      `• Sexo (homem/mulher)\n` +
+      `• Peso (ex: 75kg)\n` +
+      `• Altura (ex: 1,72m)\n` +
+      `• Idade (ex: 28 anos)\n\n` +
+      `📝 _Exemplo: "Sou mulher, 65kg, 1,62m, 27 anos"_\n\n` +
+      `Opcional: informe seu treino (musculação, crossfit, calistenia) e objetivo (emagrecer/ganhar massa) para um resultado ainda mais completo!`;
   }
 
   const bmr = calculateBMR(metrics);
@@ -1203,8 +1208,8 @@ function formatBMRResponse(text: string): string {
 
 function isBMRQuery(text: string): boolean {
   const n = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-  const explicitBMR = /\b(tmb|taxa metabolica|metabolismo basal|imc|indice de massa corporal|calcular.*metabolismo|metabolismo.*calcular|calcular.*imc|imc.*calcul|meu.*metabolismo|metabolismo.*basal|tdee|gasto calorico|necessidade calorica|calorias.*que preciso.*dia|quantas calorias.*preciso)\b/.test(n);
-  const implicitBMR = /(peso|kg|altura|metros|cm|anos)/.test(n) && /(metabolismo|imc|caloria|tmb|tdee|emagrec|ganhar|treino|deficit|superavit)/.test(n);
+  const explicitBMR = /\b(tmb|taxa basal|taxa metabolica|taxa metab|metabolismo basal|metabolismo|imc|indice de massa|calcular.*metabolismo|calcular.*imc|meu.*metabolismo|minha.*taxa|tdee|gasto calorico|necessidade calorica|calorias.*dia|quantas calorias.*preciso|quanto.*caloria.*preciso|taxa.*basal|basal)\b/.test(n);
+  const implicitBMR = /(peso|kg|altura|metros|cm|anos)/.test(n) && /(metabolismo|imc|caloria|tmb|tdee|emagrec|ganhar|treino|deficit|superavit|basal)/.test(n);
   return explicitBMR || implicitBMR;
 }
 
@@ -1817,7 +1822,22 @@ export async function processText(phone: string, senderName: string | undefined,
         response = nutritionClarification;
       } else {
         const knowledgeAnswer = await findKnowledgeAnswer(text);
-        response = knowledgeAnswer ?? extracted.responseMessage;
+        if (knowledgeAnswer) {
+          response = knowledgeAnswer;
+        } else {
+          // Fallback simples e direto
+          response =
+            `❓ Não entendi o que você quer fazer.\n\n` +
+            `Posso te ajudar com:\n` +
+            `• 💰 Registrar contas a pagar ou receber\n` +
+            `• 📊 Ver seu resumo financeiro\n` +
+            `• 🥗 Calorias e informações de alimentos\n` +
+            `• 🧮 Calcular IMC ou taxa basal\n\n` +
+            `Exemplos:\n` +
+            `_"Paguei 150 reais de mercado"_\n` +
+            `_"Quantas calorias tem frango?"_\n` +
+            `_"Calcule meu IMC, sou mulher 65kg 1,62m 28 anos"_`;
+        }
       }
     }
   }
