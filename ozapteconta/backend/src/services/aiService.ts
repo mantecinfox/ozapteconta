@@ -490,23 +490,11 @@ async function callProvider(
       break;
 
     case "ABACUS": {
-      // Abacus usa nova Responses API internamente — não suporta response_format sem "json" em todas as msgs.
-      // Solução: injetar instrução JSON diretamente no system prompt + remover response_format.
-      const abacusMessages = messages.map((m, idx) =>
-        idx === 0 && m.role === "system"
-          ? {
-              ...m,
-              content:
-                m.content +
-                "\n\nYou MUST respond ONLY with a raw json object. No markdown, no explanation. Output json and nothing else.",
-            }
-          : m
-      );
       url = (apiUrl || "https://routellm.abacus.ai") + "/v1/chat/completions";
       headers["Authorization"] = `Bearer ${apiKey}`;
       body = {
         model: normalizeModelForProvider(provider, model),
-        messages: abacusMessages,
+        messages,
         temperature: 0.1,
         max_tokens: 600,
         stream: false,
@@ -531,7 +519,7 @@ async function callProvider(
     method: "POST",
     headers,
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(provider === "OLLAMA" ? 60000 : 30000),
+    signal: AbortSignal.timeout(provider === "OLLAMA" || provider === "ABACUS" ? 90000 : 30000),
   });
 
   if (!response.ok) {
