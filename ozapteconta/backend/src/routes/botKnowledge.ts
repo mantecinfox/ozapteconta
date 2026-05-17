@@ -41,15 +41,48 @@ router.put("/:id", async (req: Request, res: Response) => {
   const id = parseInt(String(req.params.id), 10);
   const body = req.body as Record<string, unknown>;
 
+  if (!Number.isFinite(id) || id <= 0) {
+    res.status(400).json({ error: "ID inválido" });
+    return;
+  }
+
   try {
+    const exists = await prisma.botKnowledgeEntry.findUnique({ where: { id }, select: { id: true } });
+    if (!exists) {
+      res.status(404).json({ error: "Entrada não encontrada" });
+      return;
+    }
+
+    const title = body.title !== undefined ? String(body.title).trim() : undefined;
+    const keywords = body.keywords !== undefined ? String(body.keywords).trim() : undefined;
+    const content = body.content !== undefined ? String(body.content).trim() : undefined;
+    const priority = body.priority !== undefined ? parseInt(String(body.priority), 10) : undefined;
+
+    if (title !== undefined && !title) {
+      res.status(400).json({ error: "title não pode ser vazio" });
+      return;
+    }
+    if (keywords !== undefined && !keywords) {
+      res.status(400).json({ error: "keywords não pode ser vazio" });
+      return;
+    }
+    if (content !== undefined && !content) {
+      res.status(400).json({ error: "content não pode ser vazio" });
+      return;
+    }
+    if (priority !== undefined && !Number.isFinite(priority)) {
+      res.status(400).json({ error: "priority inválido" });
+      return;
+    }
+
     const updated = await prisma.botKnowledgeEntry.update({
       where: { id },
       data: {
-        title: body.title !== undefined ? String(body.title).trim() : undefined,
-        keywords: body.keywords !== undefined ? String(body.keywords).trim() : undefined,
-        content: body.content !== undefined ? String(body.content).trim() : undefined,
+        title,
+        keywords,
+        content,
         enabled: body.enabled !== undefined ? Boolean(body.enabled) : undefined,
-        priority: body.priority !== undefined ? parseInt(String(body.priority), 10) : undefined,
+        priority,
       },
     });
 
@@ -63,7 +96,18 @@ router.put("/:id", async (req: Request, res: Response) => {
 router.delete("/:id", async (req: Request, res: Response) => {
   const id = parseInt(String(req.params.id), 10);
 
+  if (!Number.isFinite(id) || id <= 0) {
+    res.status(400).json({ error: "ID inválido" });
+    return;
+  }
+
   try {
+    const exists = await prisma.botKnowledgeEntry.findUnique({ where: { id }, select: { id: true } });
+    if (!exists) {
+      res.status(404).json({ error: "Entrada não encontrada" });
+      return;
+    }
+
     await prisma.botKnowledgeEntry.delete({ where: { id } });
     res.json({ success: true });
   } catch (err) {

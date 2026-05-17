@@ -142,6 +142,12 @@ async function main() {
       content: "Mantenha orçamento mensal, reserva de emergência e priorize quitação de dívidas com juros altos. Compare total a pagar x total a receber para evitar saldo negativo recorrente.",
       priority: 30,
     },
+    {
+      title: "Análise nutricional de alimentos",
+      keywords: "calorias,caloria,kcal,comida,alimento,saudavel,saudável,dieta,proteina,carboidrato,gordura,refeicao,refeição,lanche",
+      content: "Posso analisar alimentos e refeições por texto ou áudio, estimando calorias, avaliando se o consumo parece saudável, o que é ideal ou não ideal, frequência sugerida e se vale consumir em pequenas quantidades. Para respostas melhores, informe alimento, preparo e quantidade aproximada.",
+      priority: 40,
+    },
   ];
 
   for (const k of knowledgeEntries) {

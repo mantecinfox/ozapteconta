@@ -68,6 +68,77 @@ function truncate(text: string, max: number): string {
   return `${value.slice(0, max - 1)}…`;
 }
 
+function buildReportEmailHtml(params: {
+  recipientName?: string | null;
+  title: string;
+  result: string;
+  periodLabel: string;
+}): string {
+  const name = (params.recipientName || "").trim().split(" ")[0] || "";
+  const greeting = name ? `Olá, ${name}!` : "Olá!";
+
+  return `
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${params.title}</title>
+  </head>
+  <body style="margin:0;padding:0;background:#f3f6fb;font-family:Segoe UI,Arial,sans-serif;color:#0f172a;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f3f6fb;padding:24px 12px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #dbe5f2;">
+            <tr>
+              <td style="padding:24px 28px;background:linear-gradient(135deg,#0b1220 0%,#12324a 55%,#1e3a8a 100%);color:#ffffff;">
+                <div style="font-size:24px;font-weight:700;letter-spacing:.2px;">ozapteconta</div>
+                <div style="margin-top:8px;font-size:14px;opacity:.9;">Relatorio financeiro com visual profissional</div>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:28px;">
+                <p style="margin:0 0 12px 0;font-size:16px;line-height:1.5;">${greeting}</p>
+                <p style="margin:0 0 18px 0;font-size:14px;line-height:1.6;color:#334155;">
+                  Seu <strong>${params.periodLabel}</strong> foi gerado com sucesso e segue em anexo neste e-mail.
+                </p>
+
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 20px 0;background:#f8fbff;border:1px solid #d7e6fb;border-radius:12px;">
+                  <tr>
+                    <td style="padding:16px 18px;">
+                      <div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.6px;">Resultado final</div>
+                      <div style="margin-top:6px;font-size:24px;font-weight:700;color:#0f172a;">${params.result}</div>
+                    </td>
+                  </tr>
+                </table>
+
+                <p style="margin:0 0 20px 0;font-size:13px;line-height:1.6;color:#475569;">
+                  Dica: para manter um acompanhamento mais preciso, revise periodicamente suas contas no painel.
+                </p>
+
+                <a href="${config.frontendUrl}" style="display:inline-block;background:#1d4ed8;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:10px;font-size:13px;font-weight:600;">
+                  Acessar painel
+                </a>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:16px 28px;background:#f8fafc;border-top:1px solid #e2e8f0;">
+                <p style="margin:0;font-size:12px;color:#64748b;line-height:1.6;">
+                  Este e-mail foi enviado automaticamente pelo ozapteconta.<br/>
+                  Se tiver qualquer dúvida, responda esta mensagem.
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+}
+
 function ensureSpace(doc: PDFKit.PDFDocument, minHeight: number) {
   if (doc.y + minHeight > doc.page.height - doc.page.margins.bottom) {
     doc.addPage();
@@ -286,13 +357,6 @@ export async function sendFinancialReportNow(phone: string, targetEmail?: string
   const emailTo = requestedEmail || report.client?.email || null;
   const deliveryResults = { whatsapp: false, email: false };
 
-  deliveryResults.whatsapp = await sendDocument(phone, {
-    buffer: report.pdfBuffer,
-    fileName: report.fileName,
-    mimeType: "application/pdf",
-    caption: `Seu relatório diário está pronto. Resultado final: ${formatCurrency(report.finalBalance)}.`,
-  });
-
   if (requestedEmail && !isValidEmailAddress(requestedEmail)) {
     return {
       success: false,
@@ -304,6 +368,56 @@ export async function sendFinancialReportNow(phone: string, targetEmail?: string
     };
   }
 
+
+  // Quando o usuário pede envio por e-mail explicitamente, prioriza e-mail
+  // e evita confirmar entrega por WhatsApp antes do sucesso do SMTP.
+  if (requestedEmail) {
+    if (!isEmailConfigured()) {
+      return {
+        success: false,
+        message:
+          "⚠️ Recebi seu pedido de envio por e-mail, mas o serviço de e-mail está indisponível no momento. " +
+          "Tente novamente em alguns instantes.",
+      };
+    }
+
+    deliveryResults.email = await sendEmailWithAttachment({
+      to: requestedEmail,
+      subject: report.title,
+      text: `Olá! Segue em anexo o seu ${report.title.toLowerCase()} do ozapteconta. Resultado final: ${formatCurrency(report.finalBalance)}.`,
+      html: buildReportEmailHtml({
+        recipientName: report.client?.fullName,
+        title: report.title,
+        result: formatCurrency(report.finalBalance),
+        periodLabel: "relatorio diario",
+      }),
+      fileName: report.fileName,
+      content: report.pdfBuffer,
+    });
+
+    if (!deliveryResults.email) {
+      return {
+        success: false,
+        message:
+          `⚠️ O relatório foi gerado, mas não consegui enviar para *${requestedEmail}* agora.\n` +
+          `Confira se o e-mail está correto e tente novamente em alguns instantes.`,
+      };
+    }
+
+    return {
+      success: true,
+      message:
+        `📄 Relatório diário enviado com sucesso para *${requestedEmail}*.\n\n` +
+        `Resultado final: *${formatCurrency(report.finalBalance)}*`,
+    };
+  }
+
+  deliveryResults.whatsapp = await sendDocument(phone, {
+    buffer: report.pdfBuffer,
+    fileName: report.fileName,
+    mimeType: "application/pdf",
+    caption: `Seu relatório diário está pronto. Resultado final: ${formatCurrency(report.finalBalance)}.`,
+  });
   if (emailTo && isEmailConfigured()) {
     deliveryResults.email = await sendEmailWithAttachment({
       to: emailTo,
@@ -313,33 +427,6 @@ export async function sendFinancialReportNow(phone: string, targetEmail?: string
       fileName: report.fileName,
       content: report.pdfBuffer,
     });
-  }
-
-  if (requestedEmail && !isEmailConfigured()) {
-    return {
-      success: false,
-      message:
-        "⚠️ Recebi seu pedido de envio por e-mail, mas o serviço de e-mail está indisponível no momento. " +
-        "Tente novamente em alguns instantes.",
-    };
-  }
-
-  if (requestedEmail && !deliveryResults.email) {
-    return {
-      success: false,
-      message:
-        `⚠️ O relatório foi gerado, mas não consegui enviar para *${requestedEmail}* agora.\n` +
-        `Confira se o e-mail está correto e tente novamente em alguns instantes.`,
-    };
-  }
-
-  if (requestedEmail && deliveryResults.email) {
-    return {
-      success: true,
-      message:
-        `📄 Relatório diário enviado com sucesso para *${requestedEmail}*.\n\n` +
-        `Resultado final: *${formatCurrency(report.finalBalance)}*`,
-    };
   }
 
   if (deliveryResults.whatsapp || deliveryResults.email) {
@@ -375,7 +462,12 @@ export async function processWeeklyFinancialReports(): Promise<{ sent: number; f
           to: client.email,
           subject: report.title,
           text: `Olá, ${client.fullName}! Segue em anexo o seu relatório semanal do ozapteconta. Resultado final: ${formatCurrency(report.finalBalance)}.`,
-          html: `<p>Olá, <strong>${client.fullName}</strong>!</p><p>Segue em anexo o seu relatório semanal do ozapteconta.</p><p><strong>Resultado final:</strong> ${formatCurrency(report.finalBalance)}</p>`,
+          html: buildReportEmailHtml({
+            recipientName: client.fullName,
+            title: report.title,
+            result: formatCurrency(report.finalBalance),
+            periodLabel: "relatorio semanal",
+          }),
           fileName: report.fileName,
           content: report.pdfBuffer,
         });

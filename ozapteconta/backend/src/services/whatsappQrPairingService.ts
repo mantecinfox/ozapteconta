@@ -6,6 +6,7 @@ import type { WASocket } from "@whiskeysockets/baileys";
 import { prisma } from "../config/prisma";
 import { logger } from "../utils/logger";
 import { processText, processAudioBuffer } from "./messageProcessor";
+import { registerWhatsappIdentityAlias, resolveWhatsappIdentity } from "./whatsappIdentityService";
 
 type PairingStatus = "IDLE" | "PAIRING" | "CONNECTED" | "DISCONNECTED" | "ERROR";
 
@@ -24,10 +25,104 @@ interface SessionState {
   manualDisconnect?: boolean;
 }
 
+const QR_TYPING_ENABLED = process.env.WPP_QR_TYPING_ENABLED !== "false";
+const QR_TYPING_MIN_MS = Number(process.env.WPP_QR_TYPING_MIN_MS ?? 1500);
+const QR_TYPING_MAX_MS = Number(process.env.WPP_QR_TYPING_MAX_MS ?? 4200);
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function computeTypingDurationMs(text: string): number {
+  const normalized = String(text || "").trim();
+  const base = 420 + normalized.length * 14;
+  const multilineBonus = normalized.includes("\n") ? 220 : 0;
+  const jitter = Math.floor(Math.random() * 221) - 110;
+  return clamp(base + multilineBonus + jitter, QR_TYPING_MIN_MS, QR_TYPING_MAX_MS);
+}
+
 class WhatsappQrPairingService {
   private sessions = new Map<number, SessionState>();
   private processedMessageIds = new Set<string>();
+  private unreadableNoticeAt = new Map<string, number>();
+  private unreadableMessageTimers = new Map<string, NodeJS.Timeout>();
   private readonly maxReconnectWindowMs = 250 * 24 * 60 * 60 * 1000; // 250 dias
+
+  private unreadableTimerKey(accountId: number, messageId: string): string {
+    return `${accountId}:${messageId}`;
+  }
+
+  private clearUnreadableFollowUp(accountId: number, messageId: string): void {
+    const key = this.unreadableTimerKey(accountId, messageId);
+    const timer = this.unreadableMessageTimers.get(key);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.unreadableMessageTimers.delete(key);
+  }
+
+  private scheduleUnreadableFollowUp(accountId: number, remoteJid: string, messageId: string): void {
+    const key = this.unreadableTimerKey(accountId, messageId);
+    this.clearUnreadableFollowUp(accountId, messageId);
+
+    const timer = setTimeout(async () => {
+      this.unreadableMessageTimers.delete(key);
+      if (!this.shouldSendUnreadableNotice(remoteJid)) return;
+
+      try {
+        const session = this.sessions.get(accountId);
+        await session?.sock.sendMessage(remoteJid, {
+          text:
+            "Entendi que sua mensagem pode ter vindo em um formato que eu nao consegui ler aqui. " +
+            "Vou tentar interpretar melhor agora.\n\n" +
+            "Se ainda assim eu nao conseguir, me desculpe. Pode reenviar em texto simples e eu respondo corretamente.",
+        });
+      } catch (replyErr) {
+        logger.warn(`[WPP QR] Falha ao enviar aviso de mensagem ilegível (${remoteJid}): ${String(replyErr)}`);
+      }
+    }, 2200);
+
+    this.unreadableMessageTimers.set(key, timer);
+  }
+
+  private shouldSendUnreadableNotice(remoteJid: string): boolean {
+    const key = String(remoteJid || "").trim();
+    if (!key) return false;
+
+    const now = Date.now();
+    const lastAt = this.unreadableNoticeAt.get(key) || 0;
+    if (now - lastAt < 120000) return false; // evita spam em sequência
+
+    this.unreadableNoticeAt.set(key, now);
+    return true;
+  }
+
+  private async resolveLidToPhone(session: SessionState, remoteJid: string): Promise<string | null> {
+    const mapped = session.lidToJidMap.get(remoteJid);
+    if (mapped) {
+      return this.normalizeFromJid(mapped);
+    }
+
+    // Aguarda um curto intervalo para dar chance do contacts.upsert preencher o mapa.
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+
+    const mappedAfterWait = session.lidToJidMap.get(remoteJid);
+    if (mappedAfterWait) {
+      return this.normalizeFromJid(mappedAfterWait);
+    }
+
+    // Fallback: consulta alias persistido no banco (system_settings)
+    try {
+      const { canonicalPhone } = await resolveWhatsappIdentity(remoteJid);
+      if (canonicalPhone && !canonicalPhone.endsWith("@lid") && /^\d+$/.test(canonicalPhone)) {
+        logger.info(`[WPP QR] @lid resolvido via DB alias: ${remoteJid} → ${canonicalPhone}`);
+        return canonicalPhone;
+      }
+    } catch (dbErr) {
+      logger.warn(`[WPP QR] Erro ao consultar alias DB para ${remoteJid}: ${String(dbErr)}`);
+    }
+
+    return null;
+  }
 
   constructor() {
     // Restaura sessões pareadas após restart do backend.
@@ -121,12 +216,18 @@ class WhatsappQrPairingService {
     const m = msg?.message?.ephemeralMessage?.message || msg?.message?.viewOnceMessage?.message || msg?.message;
     if (!m) return null;
 
+    const edited = m.protocolMessage?.editedMessage?.message;
+    if (edited?.conversation) return String(edited.conversation);
+    if (edited?.extendedTextMessage?.text) return String(edited.extendedTextMessage.text);
+
     if (m.conversation) return String(m.conversation);
     if (m.extendedTextMessage?.text) return String(m.extendedTextMessage.text);
     if (m.imageMessage?.caption) return String(m.imageMessage.caption);
     if (m.videoMessage?.caption) return String(m.videoMessage.caption);
+    if (m.documentMessage?.caption) return String(m.documentMessage.caption);
     if (m.buttonsResponseMessage?.selectedDisplayText) return String(m.buttonsResponseMessage.selectedDisplayText);
     if (m.listResponseMessage?.title) return String(m.listResponseMessage.title);
+    if (m.listResponseMessage?.singleSelectReply?.selectedRowId) return String(m.listResponseMessage.singleSelectReply.selectedRowId);
     if (m.templateButtonReplyMessage?.selectedDisplayText) return String(m.templateButtonReplyMessage.selectedDisplayText);
 
     return null;
@@ -302,17 +403,21 @@ class WhatsappQrPairingService {
           // Resolve número: para @lid, busca o JID real no mapa de contatos
           let phone: string;
           if (remoteJid.endsWith("@lid")) {
-            const realJid = session.lidToJidMap.get(remoteJid);
-            if (!realJid) {
-              // @lid ainda não mapeado — usa o JID completo para poder responder corretamente
-              logger.info(`[WPP QR] @lid não resolvido ainda (${remoteJid}), usando JID completo para resposta`);
-              phone = remoteJid; // JID completo: permite enviar de volta ao @lid
-            } else {
-              phone = this.normalizeFromJid(realJid);
-              logger.info(`[WPP QR] @lid resolvido: ${remoteJid} → ${phone}`);
+            const resolvedPhone = await this.resolveLidToPhone(session, remoteJid);
+            if (!resolvedPhone) {
+              // Não processa mensagem com identificador temporário para evitar onboarding indevido
+              // e inconsistência de cadastro para clientes já ativos.
+              logger.warn(`[WPP QR] @lid não resolvido (${remoteJid}) após espera; mensagem ignorada para evitar fluxo inconsistente`);
+              continue;
             }
+            phone = resolvedPhone;
+            await registerWhatsappIdentityAlias(remoteJid, phone);
+            logger.info(`[WPP QR] @lid resolvido: ${remoteJid} → ${phone}`);
           } else {
             phone = this.normalizeFromJid(remoteJid);
+            if (phone) {
+              await registerWhatsappIdentityAlias(remoteJid, phone);
+            }
           }
           if (!phone) continue;
 
@@ -322,6 +427,7 @@ class WhatsappQrPairingService {
             const m = msg?.message?.ephemeralMessage?.message || msg?.message?.viewOnceMessage?.message || msg?.message;
             const audioMsg = m?.audioMessage;
             if (audioMsg) {
+              this.clearUnreadableFollowUp(accountId, messageId);
               const senderName = msg?.pushName || undefined;
               logger.info(`[WPP QR] Áudio recebido em conta ${accountId} de ${phone} — processando...`);
               try {
@@ -338,9 +444,17 @@ class WhatsappQrPairingService {
               }
             } else {
               logger.info(`[WPP QR] Mensagem sem texto útil na conta ${accountId} (jid=${remoteJid}, id=${messageId}, msg_keys=${Object.keys(msg?.message || {}).join(',')})`);
+
+              // Permite nova tentativa quando o WhatsApp entregar o mesmo ID em formato completo (append/update).
+              this.processedMessageIds.delete(messageId);
+
+              // Aguarda uma segunda chance antes de avisar o usuário.
+              this.scheduleUnreadableFollowUp(accountId, remoteJid, messageId);
             }
             continue;
           }
+
+          this.clearUnreadableFollowUp(accountId, messageId);
 
           const senderName =
             msg?.pushName ||
@@ -626,7 +740,34 @@ class WhatsappQrPairingService {
     if (!connected) return false;
 
     try {
-      await connected.sock.sendMessage(this.normalizeToJid(to), { text });
+      const jid = this.normalizeToJid(to);
+
+      if (QR_TYPING_ENABLED) {
+        const typingMs = computeTypingDurationMs(text);
+        try {
+          await connected.sock.presenceSubscribe(jid);
+        } catch {
+          // presença pode falhar em alguns estados; envio segue normalmente
+        }
+
+        try {
+          await connected.sock.sendPresenceUpdate("composing", jid);
+          await new Promise((resolve) => setTimeout(resolve, typingMs));
+        } catch {
+          // se presença falhar, não interrompe o envio da mensagem
+        }
+      }
+
+      await connected.sock.sendMessage(jid, { text });
+
+      if (QR_TYPING_ENABLED) {
+        try {
+          await connected.sock.sendPresenceUpdate("paused", jid);
+        } catch {
+          // ignore
+        }
+      }
+
       return true;
     } catch (err) {
       logger.error("[WPP QR] Erro ao enviar mensagem por sessão conectada", err);

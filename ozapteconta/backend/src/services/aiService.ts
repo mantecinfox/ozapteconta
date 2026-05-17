@@ -24,6 +24,42 @@ export interface ExtractedTransaction {
   transcription?: string | null;
 }
 
+function buildNutritionPrompt(): string {
+  return `Você é um assistente nutricional educativo via WhatsApp, respondendo em português brasileiro.
+
+OBJETIVO:
+- reconhecer alimentos, refeições e bebidas citados pelo usuário
+- estimar calorias por item e total quando houver contexto suficiente
+- informar se o consumo parece saudável, aceitável com moderação ou não ideal
+- dizer frequência e porção sugeridas de forma prática
+- apontar excessos de açúcar, sódio, gordura, ultraprocessados ou baixa saciedade quando aplicável
+
+REGRAS:
+- responda em texto simples para WhatsApp, sem JSON
+- seja objetivo e útil
+- se faltar quantidade, diga que a estimativa considera porção comum
+- nunca trate a estimativa como valor exato
+- não prescreva tratamento médico, dieta clínica ou diagnóstico
+- quando o alimento puder fazer parte de uma boa rotina, explique a condição (quantidade, preparo, frequência)
+- quando não for ideal, explique o motivo principal
+
+FORMATO:
+🥗 *Resumo*
+🔥 *Calorias estimadas*
+✅ *Avaliação*
+⏱️ *Frequência e porção*
+📌 *Observação*
+
+ORIENTAÇÕES DE CONTEÚDO:
+- use faixas aproximadas de calorias quando necessário
+- cite proteína, carboidrato, gordura, fibra ou sódio apenas se isso ajudar a decisão
+- exemplos de frequência aceitável: diário, algumas vezes por semana, ocasionalmente
+- se o usuário listar vários itens, analise o conjunto da refeição
+- se a mensagem não trouxer um alimento identificável, peça para a pessoa descrever o alimento e a quantidade
+
+Não diga que você é uma IA. Não use linguagem excessivamente técnica.`;
+}
+
 const DEFAULT_ABACUS_AUDIO_MODELS = [
   "gpt-4o-audio-preview",
   "gpt-4o-mini-audio-preview",
@@ -135,6 +171,96 @@ function extractResponseContent(content: unknown): string {
     .trim();
 }
 
+function normalizeMissingFields(fields: string[] | null | undefined): string[] {
+  return Array.isArray(fields)
+    ? fields
+        .map((field) => String(field || "").trim().toLowerCase())
+        .filter(Boolean)
+    : [];
+}
+
+function normalizeContext(contexto: string | null | undefined): "PESSOAL" | "COMERCIAL" | "NEUTRO" {
+  if (contexto === "PESSOAL") return "PESSOAL";
+  if (contexto === "COMERCIAL") return "COMERCIAL";
+  return "NEUTRO";
+}
+
+function buildSmartMissingInfoMessage(
+  tipo: string,
+  missingFields: string[],
+  contexto: "PESSOAL" | "COMERCIAL" | "NEUTRO",
+): string {
+  const safeTipo = (tipo || "lançamento").trim();
+  const normalized = normalizeMissingFields(missingFields);
+  const asks: string[] = [];
+
+  if (normalized.includes("valor")) {
+    asks.push("- valor (ex: 249,90)");
+  }
+  if (normalized.includes("vencimento")) {
+    asks.push("- data de vencimento (ex: dia 25)");
+  }
+  if (normalized.includes("tipo")) {
+    asks.push("- qual é a conta/despesa (ex: luz, internet, aluguel)");
+  }
+
+  if (asks.length === 0) {
+    asks.push("- valor");
+  }
+
+  const introByContext: Record<"PESSOAL" | "COMERCIAL" | "NEUTRO", string> = {
+    PESSOAL: `Perfeito, já identifiquei sua despesa pessoal: *${safeTipo}*.`,
+    COMERCIAL: `Perfeito, já identifiquei o lançamento da sua empresa: *${safeTipo}*.`,
+    NEUTRO: `Perfeito, já identifiquei que você quer registrar *${safeTipo}*.`,
+  };
+
+  const phraseByContext: Record<"PESSOAL" | "COMERCIAL" | "NEUTRO", string> = {
+    PESSOAL: "Para finalizar direitinho no seu controle pessoal, me passe:",
+    COMERCIAL: "Para fechar o lançamento financeiro da empresa sem erro, me passe:",
+    NEUTRO: "Para concluir certinho, me passe só estes dados:",
+  };
+
+  const exampleByContext: Record<"PESSOAL" | "COMERCIAL" | "NEUTRO", string> = {
+    PESSOAL: `Exemplo: *${safeTipo} 249,90 vence dia 25*`,
+    COMERCIAL: `Exemplo: *${safeTipo} 249,90 vence dia 25 fornecedor XPTO*`,
+    NEUTRO: `Exemplo: *${safeTipo} 249,90 vence dia 25*`,
+  };
+
+  return (
+    introByContext[contexto] +
+    `\n${phraseByContext[contexto]}` +
+    `\n${asks.join("\n")}` +
+    "\n\nSe preferir, pode mandar em uma frase só." +
+    `\n${exampleByContext[contexto]}`
+  );
+}
+
+function sanitizeAiResponseMessage(parsed: {
+  tipo?: string | null;
+  contexto?: string | null;
+  needsMoreInfo?: boolean | null;
+  missingFields?: string[] | null;
+  responseMessage?: string | null;
+}): string {
+  const currentMessage = String(parsed.responseMessage || "").trim();
+  const tipo = String(parsed.tipo || "lançamento").trim();
+  const contexto = normalizeContext(parsed.contexto);
+  const missingFields = normalizeMissingFields(parsed.missingFields || []);
+
+  const hasBadPattern =
+    /problema\s+estrutural|conserto|manuten[cç][aã]o|ordem\s+de\s+servi[cç]o/i.test(currentMessage);
+
+  if (parsed.needsMoreInfo) {
+    // Força consistência por contexto para evitar variações ruins de modelo.
+    if (!currentMessage || hasBadPattern || missingFields.length > 0) {
+      return buildSmartMissingInfoMessage(tipo, missingFields, contexto);
+    }
+    return buildSmartMissingInfoMessage(tipo, missingFields, contexto);
+  }
+
+  return currentMessage || "✅ Registrado!";
+}
+
 // ─── System prompt para extração de transações ────────────────────────────────
 function buildExtractionPrompt(
   allowedContexts: ("PESSOAL" | "COMERCIAL")[],
@@ -234,6 +360,11 @@ REGRAS DE CATEGORIZAÇÃO:
 • fatiador de frios mercearia, balança hortifrúti mercearia, registradora elétrica, etiquetadora de preço mercearia, sacola plástica mercearia, gôndola mercearia, armadilha de roedor, dedetização mercearia, PDV mercearia → "Mercearia (Operação)" [COMERCIAL]
 • taxa Uber, taxa 99, taxa inDriver, repasse de viagem, gasolina motorista app, rastreador veicular, chip de dados motorista, MEI motorista, DASN motorista, nota fiscal motorista, suporte de celular carro, extintor automotivo, cadeirinha bebê → "Transporte por App (Operação)" [COMERCIAL]
 
+REGRAS PARA A "responseMessage":
+• Se "needsMoreInfo" for true, peça apenas os campos faltantes de forma objetiva e amigável.
+• Não use linguagem de diagnóstico técnico (ex: "problema estrutural", "conserto", "manutenção") para mensagens financeiras.
+• Evite tom robótico ou genérico. Foque em ajudar a concluir o lançamento em uma próxima mensagem.
+
 HOJE: ${dayOfWeek}, ${now.toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" })}
 DATA ISO: ${today}
 
@@ -254,7 +385,7 @@ Entrada: "paguei fornecedor 1500"
 Saída: {"tipo":"Pagamento Fornecedor","valor":1500.00,"natureza":"PAGAR","contexto":"COMERCIAL","categoria":"Fornecedores e Insumos","vencimento":null,"confidence":0.90,"needsMoreInfo":false,"missingFields":[],"responseMessage":"✅ *Pagamento Fornecedor* registrado!\\n💰 R$ 1.500,00\\n📂 Fornecedores e Insumos 🏭"}
 
 Entrada: "conta do cartão"
-Saída: {"tipo":"Fatura Cartão de Crédito","valor":null,"natureza":"PAGAR","contexto":"PESSOAL","categoria":"Emergências e Imprevistos","vencimento":null,"confidence":0.55,"needsMoreInfo":true,"missingFields":["valor","vencimento"],"responseMessage":"📝 Entendi que é a *Fatura do Cartão*. Pode informar:\\n• 💰 Qual o valor?\\n• 📅 Qual a data de vencimento?"}
+Saída: {"tipo":"Fatura Cartão de Crédito","valor":null,"natureza":"PAGAR","contexto":"PESSOAL","categoria":"Emergências e Imprevistos","vencimento":null,"confidence":0.55,"needsMoreInfo":true,"missingFields":["valor","vencimento"],"responseMessage":"Perfeito, já identifiquei que você quer registrar *Fatura Cartão de Crédito*.\\nPara concluir certinho, me passe só estes dados:\\n- valor (ex: 249,90)\\n- data de vencimento (ex: dia 25)\\n\\nSe preferir, pode mandar em uma frase só.\\nExemplo: *Fatura Cartão de Crédito 249,90 vence dia 25*"}
 
 Retorne APENAS o JSON, sem markdown, sem explicações.`;
 }
@@ -421,6 +552,70 @@ async function getAbacusAudioModelChain(): Promise<string[]> {
     logger.warn(`[AIService] Falha ao carregar cadeia de modelos de áudio da ABACUS: ${String(err)}`);
     return DEFAULT_ABACUS_AUDIO_MODELS;
   }
+}
+
+export async function analyzeNutrition(text: string, history: AIMessage[] = []): Promise<string | null> {
+  const messages: AIMessage[] = [
+    { role: "system", content: buildNutritionPrompt() },
+    ...history.slice(-4),
+    { role: "user", content: text },
+  ];
+
+  const chain = await getProviderChain("text");
+  let lastError: unknown;
+
+  for (const provider of chain) {
+    if (provider.provider !== "OLLAMA" && !provider.apiKey) continue;
+
+    const startedAt = Date.now();
+    const attempt = chain.indexOf(provider) + 1;
+
+    try {
+      const providerResult = await callProvider(
+        provider.provider,
+        provider.apiKey || "",
+        normalizeModelForProvider(provider.provider, provider.model),
+        messages,
+        provider.apiUrl,
+      );
+      const content = providerResult.content.trim();
+
+      await writeAiUsageLog({
+        ts: new Date().toISOString(),
+        provider: provider.provider,
+        model: normalizeModelForProvider(provider.provider, provider.model),
+        channel: "text",
+        stage: "extract",
+        success: Boolean(content),
+        latencyMs: Date.now() - startedAt,
+        fallbackUsed: attempt > 1,
+        attempt,
+        promptTokens: providerResult.usage?.promptTokens,
+        completionTokens: providerResult.usage?.completionTokens,
+        totalTokens: providerResult.usage?.totalTokens,
+      });
+
+      if (content) return content;
+    } catch (err) {
+      lastError = err;
+      await writeAiUsageLog({
+        ts: new Date().toISOString(),
+        provider: provider.provider,
+        model: normalizeModelForProvider(provider.provider, provider.model),
+        channel: "text",
+        stage: "extract",
+        success: false,
+        latencyMs: Date.now() - startedAt,
+        fallbackUsed: attempt > 1,
+        attempt,
+        error: String(err),
+      });
+      logger.warn(`[AIService] Análise nutricional com ${provider.provider} falhou — tentando próximo: ${String(err)}`);
+    }
+  }
+
+  logger.warn(`[AIService] Análise nutricional indisponível: ${String(lastError)}`);
+  return null;
 }
 
 // ─── Transcrição de áudio com fallback para múltiplos provedores ────────────
@@ -598,7 +793,7 @@ export async function extractTransactionFromAudio(
         confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0.5,
         needsMoreInfo: parsed.needsMoreInfo ?? true,
         missingFields: parsed.missingFields || [],
-        responseMessage: parsed.responseMessage || "✅ Registrado!",
+        responseMessage: sanitizeAiResponseMessage(parsed),
         transcription: transcription || parsed.transcription?.trim() || null,
       };
     } catch (err) {
@@ -736,7 +931,7 @@ export async function extractTransaction(
       confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0.5,
       needsMoreInfo: parsed.needsMoreInfo ?? true,
       missingFields: parsed.missingFields || [],
-      responseMessage: parsed.responseMessage || "✅ Registrado!",
+      responseMessage: sanitizeAiResponseMessage(parsed),
     };
   } catch (err) {
     logger.error("[AIService] Erro na extração:", err);
@@ -831,6 +1026,15 @@ export async function extractTransaction(
       };
     }
 
+    const fallbackContext: "PESSOAL" | "COMERCIAL" | "NEUTRO" =
+      allowedContexts.length === 1 ? normalizeContext(allowedContexts[0]) : "NEUTRO";
+
+    const fallbackHeaderByContext: Record<"PESSOAL" | "COMERCIAL" | "NEUTRO", string> = {
+      PESSOAL: "Recebi sua mensagem e quero te ajudar a registrar isso no seu controle pessoal.",
+      COMERCIAL: "Recebi sua mensagem e quero te ajudar a registrar isso no financeiro da empresa.",
+      NEUTRO: "Recebi sua mensagem e quero te ajudar a concluir isso agora.",
+    };
+
     // Sem dados suficientes mesmo com regex
     return {
       tipo: tipo || "Conta",
@@ -844,14 +1048,13 @@ export async function extractTransaction(
       needsMoreInfo: true,
       missingFields: valor ? ["tipo"] : ["tipo", "valor"],
       responseMessage:
-        "⚠️ Ainda não consegui entender essa mensagem por completo.\n\n" +
-        "Se for um registro financeiro, envie neste formato:\n" +
-        "• *gasolina 120*\n" +
-        "• *luz 150 dia 20*\n" +
-        "• *recebi 500 de salário*\n\n" +
-        "Se você pediu relatório por e-mail, use:\n" +
-        "• *enviar pdf do resumo para email nome@dominio.com*\n\n" +
-        "_Algumas respostas podem levar alguns segundos para processamento._",
+        `${fallbackHeaderByContext[fallbackContext]}\n` +
+        "Para registrar corretamente, me envie em um formato parecido com estes exemplos:\n" +
+        "- *gasolina 120*\n" +
+        "- *luz 150 dia 20*\n" +
+        "- *recebi 500 de salário*\n\n" +
+        "Se for relatório por e-mail, pode pedir assim:\n" +
+        "- *enviar pdf do resumo para email nome@dominio.com*",
     };
   }
 }

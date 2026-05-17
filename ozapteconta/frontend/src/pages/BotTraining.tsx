@@ -16,6 +16,26 @@ export default function BotTraining() {
   const qc = useQueryClient();
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState(EMPTY);
+  const [toast, setToast] = useState("");
+
+  const showToast = (message: string) => {
+    setToast(message);
+    setTimeout(() => setToast(""), 3500);
+  };
+
+  const normalizedForm = {
+    title: form.title.trim(),
+    keywords: form.keywords.trim(),
+    content: form.content.trim(),
+    enabled: form.enabled,
+    priority: Number.isFinite(form.priority) ? form.priority : 100,
+  };
+
+  const isFormValid =
+    normalizedForm.title.length > 0 &&
+    normalizedForm.keywords.length > 0 &&
+    normalizedForm.content.length > 0 &&
+    Number.isFinite(normalizedForm.priority);
 
   const { data = [] } = useQuery({
     queryKey: ["bot-knowledge"],
@@ -24,19 +44,36 @@ export default function BotTraining() {
 
   const saveMutation = useMutation({
     mutationFn: () => {
-      if (editingId) return api.put(`/bot-knowledge/${editingId}`, form);
-      return api.post("/bot-knowledge", form);
+      if (!isFormValid) {
+        throw new Error("Preencha título, palavras-chave e conteúdo antes de salvar.");
+      }
+      if (editingId !== null) return api.put(`/bot-knowledge/${editingId}`, normalizedForm);
+      return api.post("/bot-knowledge", normalizedForm);
     },
     onSuccess: () => {
       setEditingId(null);
       setForm(EMPTY);
       qc.invalidateQueries({ queryKey: ["bot-knowledge"] });
+      showToast("Parâmetro salvo com sucesso!");
+    },
+    onError: (err: { response?: { data?: { error?: string } }; message?: string }) => {
+      showToast(err.response?.data?.error || err.message || "Falha ao salvar parâmetro.");
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => api.delete(`/bot-knowledge/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["bot-knowledge"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["bot-knowledge"] });
+      if (editingId !== null) {
+        setEditingId(null);
+        setForm(EMPTY);
+      }
+      showToast("Parâmetro excluído com sucesso!");
+    },
+    onError: (err: { response?: { data?: { error?: string } }; message?: string }) => {
+      showToast(err.response?.data?.error || err.message || "Falha ao excluir parâmetro.");
+    },
   });
 
   return (
@@ -45,6 +82,12 @@ export default function BotTraining() {
         <h1 className="text-2xl font-bold text-foreground">Treinamento do Bot</h1>
         <p className="text-sm text-muted-foreground mt-0.5">Adicione contexto, parâmetros e respostas que o ozapteconta deve seguir</p>
       </div>
+
+      {toast && (
+        <div className="rounded-lg border border-success/20 bg-success/10 p-3 text-sm text-success">
+          {toast}
+        </div>
+      )}
 
       <Card>
         <CardHeader>
@@ -72,7 +115,7 @@ export default function BotTraining() {
           </div>
 
           <div className="flex gap-2">
-            <Button loading={saveMutation.isPending} onClick={() => saveMutation.mutate()}>
+            <Button loading={saveMutation.isPending} disabled={!isFormValid} onClick={() => saveMutation.mutate()}>
               {editingId ? <Save className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
               {editingId ? "Salvar" : "Adicionar"}
             </Button>
@@ -104,7 +147,16 @@ export default function BotTraining() {
                       priority: item.priority,
                     });
                   }}>Editar</Button>
-                  <Button size="sm" variant="destructive" loading={deleteMutation.isPending} onClick={() => deleteMutation.mutate(item.id)}>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    loading={deleteMutation.isPending}
+                    onClick={() => {
+                      if (window.confirm("Tem certeza que deseja excluir este parâmetro de treinamento?")) {
+                        deleteMutation.mutate(item.id);
+                      }
+                    }}
+                  >
                     <Trash2 className="w-3.5 h-3.5" /> Excluir
                   </Button>
                 </div>

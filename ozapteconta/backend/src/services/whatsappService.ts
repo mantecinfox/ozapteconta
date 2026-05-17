@@ -10,6 +10,44 @@ interface WppConfig {
   apiBase: string;
 }
 
+const HUMANIZED_SEND_ENABLED = process.env.WPP_HUMANIZE_ENABLED !== "false";
+const HUMANIZED_DELAY_MIN_MS = Number(process.env.WPP_HUMANIZE_MIN_MS ?? 300);
+const HUMANIZED_DELAY_MAX_MS = Number(process.env.WPP_HUMANIZE_MAX_MS ?? 2600);
+
+const CRITICAL_FAST_TRACK_REGEX = /(\botp\b|\b2fa\b|\bcodigo\b|\bcódigo\b|\btoken\b|\bsenha\b|\bexpirou\b|\burgente\b|\berro\b|\bfalha\b)/i;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function shouldBypassHumanizedDelay(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized) return true;
+  if (CRITICAL_FAST_TRACK_REGEX.test(normalized)) return true;
+  return false;
+}
+
+function computeHumanizedDelayMs(text: string): number {
+  const normalized = text.trim();
+  const length = normalized.length;
+
+  // Delay scales with message size, then receives small jitter to avoid robotic pacing.
+  const base = 280 + length * 18;
+  const multilineBonus = normalized.includes("\n") ? 160 : 0;
+  const punctuationBonus = /[.!?]/.test(normalized) ? 80 : 0;
+  const jitter = Math.floor(Math.random() * 241) - 120;
+
+  return clamp(base + multilineBonus + punctuationBonus + jitter, HUMANIZED_DELAY_MIN_MS, HUMANIZED_DELAY_MAX_MS);
+}
+
+async function maybeApplyHumanizedDelay(text: string): Promise<void> {
+  if (!HUMANIZED_SEND_ENABLED) return;
+  if (shouldBypassHumanizedDelay(text)) return;
+
+  const delayMs = computeHumanizedDelayMs(text);
+  await sleep(delayMs);
+}
+
 async function sleep(ms: number) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -87,6 +125,8 @@ export async function sendMessage(to: string, text: string): Promise<boolean> {
   }
 
   try {
+    await maybeApplyHumanizedDelay(text);
+
     const res = await fetch(`${cfg.apiBase}/${cfg.phoneNumberId}/messages`, {
       method: "POST",
       headers: {

@@ -5,7 +5,13 @@ import { logger } from "../utils/logger";
 let transporter: nodemailer.Transporter | null = null;
 
 export function isEmailConfigured(): boolean {
-  return Boolean(config.email.host && config.email.port && config.email.from);
+  return Boolean(
+    config.email.host &&
+      config.email.port &&
+      config.email.from &&
+      config.email.user &&
+      config.email.pass,
+  );
 }
 
 function getTransporter(): nodemailer.Transporter | null {

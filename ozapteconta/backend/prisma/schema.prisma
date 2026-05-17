@@ -93,6 +93,7 @@ model FinancialTransaction {
   extractedConfidence Decimal?     @db.Decimal(3, 2)
   needsHumanReview    Boolean      @default(false)
   paidAt              DateTime?
+  paymentMethod       String?      // "CREDITO" | "DEBITO" | "DINHEIRO" | "PIX" | null
   notes               String?      @db.Text
   createdAt           DateTime     @default(now())
   updatedAt           DateTime     @updatedAt

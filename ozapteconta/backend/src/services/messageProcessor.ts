@@ -4,7 +4,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { config } from "../config";
 import { logger } from "../utils/logger";
-import { extractTransaction, extractTransactionFromAudio, AIMessage } from "./aiService";
+import { extractTransaction, extractTransactionFromAudio, analyzeNutrition, AIMessage } from "./aiService";
 import { sendMessage, downloadMedia, formatCurrency, formatDate } from "./whatsappService";
 import { transcribeAudio } from "./transcriptionService";
 import { issueClientPortalAccess } from "./clientAccessService";
@@ -12,6 +12,7 @@ import infinityPayService from "./infinityPayService";
 import { sendFinancialReportNow } from "./financialReportService";
 import { detectMarketQuery, executeMarketQuery, getMarketHelp } from "./marketDataService";
 import { detectFipeQuery, queryFipe, getFipeHelp } from "./fipeService";
+import { resolveWhatsappIdentity } from "./whatsappIdentityService";
 
 const ONBOARDING_TIMEOUT_MINUTES = 10;
 
@@ -112,8 +113,10 @@ async function sendPlanOptions(phone: string) {
 async function handleOnboarding(
   user: { registrationStep: string | null; registrationData: unknown; updatedAt: Date; createdAt: Date },
   phone: string,
-  text: string
+  text: string,
+  aliases: string[] = []
 ): Promise<boolean> {
+  const candidatePhones = Array.from(new Set([phone, ...aliases].filter(Boolean)));
   const trimmed = text.trim();
   const nowMs = Date.now();
   let step = user.registrationStep;
@@ -143,10 +146,17 @@ async function handleOnboarding(
   }
 
   // 1. Verifica ClientProfile existente
-  const profile = await prisma.clientProfile.findUnique({
-    where: { phone },
+  const profile = await prisma.clientProfile.findFirst({
+    where: { phone: { in: candidatePhones } },
     include: { subscription: true },
   });
+
+  if (profile?.phone && profile.phone !== phone) {
+    await prisma.clientProfile.update({
+      where: { id: profile.id },
+      data: { phone },
+    }).catch(() => null);
+  }
 
   if (profile) {
     if (profile.status === "ACTIVE" && profile.subscription?.status === "ACTIVE") {
@@ -156,7 +166,7 @@ async function handleOnboarding(
 
     if (profile.subscription?.status === "ACTIVE" && profile.status !== "ACTIVE") {
       await prisma.clientProfile.update({
-        where: { phone },
+        where: { id: profile.id },
         data: { status: "ACTIVE", activatedAt: new Date() },
       });
       await setRegistrationStep(phone, null);
@@ -715,7 +725,7 @@ async function handleOnboarding(
       } else {
         // Buscar dados da assinatura para gerar/reenviar link de pagamento
         const clientProfile = await prisma.clientProfile.findFirst({
-          where: { phone, status: "PENDING_ACTIVATION" },
+          where: { phone: { in: candidatePhones }, status: "PENDING_ACTIVATION" },
           include: { subscription: true },
         });
 
@@ -871,11 +881,52 @@ function extractEmailFromText(text: string): string | null {
 }
 
 // ─── Obter ou criar usuário WhatsApp ─────────────────────────────────────────
-async function getOrCreateUser(phone: string, name?: string) {
-  return prisma.whatsappUser.upsert({
-    where: { phone },
-    update: name ? { name } : {},
-    create: { phone, name: name || null },
+async function getOrCreateUser(phone: string, name?: string, aliases: string[] = []) {
+  const candidates = Array.from(new Set([phone, ...aliases].filter(Boolean)));
+
+  const existing = await prisma.whatsappUser.findFirst({
+    where: { phone: { in: candidates } },
+    select: {
+      id: true,
+      phone: true,
+      name: true,
+      conversationContext: true,
+      isActive: true,
+      totalTransactions: true,
+      registrationStep: true,
+      registrationData: true,
+      updatedAt: true,
+      createdAt: true,
+    },
+  });
+
+  if (existing) {
+    if (existing.phone !== phone || (name && existing.name !== name)) {
+      return prisma.whatsappUser.update({
+        where: { id: existing.id },
+        data: {
+          ...(existing.phone !== phone ? { phone } : {}),
+          ...(name && existing.name !== name ? { name } : {}),
+        },
+        select: {
+          id: true,
+          phone: true,
+          name: true,
+          conversationContext: true,
+          isActive: true,
+          totalTransactions: true,
+          registrationStep: true,
+          registrationData: true,
+          updatedAt: true,
+          createdAt: true,
+        },
+      });
+    }
+    return existing;
+  }
+
+  return prisma.whatsappUser.create({
+    data: { phone, name: name || null },
     select: {
       id: true,
       phone: true,
@@ -924,6 +975,86 @@ async function findKnowledgeAnswer(text: string): Promise<string | null> {
   }
 
   return null;
+}
+
+function isNutritionQuery(text: string): boolean {
+  const normalized = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+  const nutritionIntent = /caloria|kcal|proteina|carbo|gordura|fibra|saudavel|engorda|emagrece|dieta|indice glicemico|sodio|colesterol|vitamina|mineral|porcao|quantidade|pode comer|deve comer|faz bem|faz mal|refeicao|alimento|alimentacao|comida|lanche|janta|jantar|cafe da manha|cafe da tarde|ceia|quantas vezes|quanto tempo posso comer/;
+  const foodTerms = /arroz|feijao|frango|ovo|banana|maca|pao|queijo|leite|carne|peixe|batata|mandioca|salada|alface|tomate|abacate|aveia|iogurte|whey|way|suplemento|pizza|hamburguer|hamburger|sushi|refrigerante|bolo|chocolate|biscoito|bolacha|macarrao|pastel|coxinha|acai|suco|cafe|marmita|lanche/;
+
+  if (nutritionIntent.test(normalized)) return true;
+  return foodTerms.test(normalized) && /(quant|caloria|saudavel|engorda|emagrece|pode comer|deve comer|faz bem|faz mal|porcao|quantidade)/.test(normalized);
+}
+
+function getNutritionClarificationPrompt(text: string): string | null {
+  const normalized = text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!normalized || isNutritionQuery(text)) return null;
+  if (normalized.length > 80) return null;
+  if (/\b(r\$|reais|vence|vencimento|dia\s+\d+|aluguel|conta|boleto|paguei|pagar|recebi|receber)\b/.test(normalized)) return null;
+
+  const foodOrDrinkTerms = /\b(agua|suco|cafe|cha|leite|refrigerante|vitamina|banana|maca|pao|queijo|ovo|arroz|feijao|frango|carne|peixe|batata|mandioca|salada|alface|tomate|abacate|aveia|iogurte|whey|way|suplemento|pizza|hamburguer|hamburger|sushi|bolo|chocolate|biscoito|bolacha|macarrao|pastel|coxinha|acai|marmita|lanche)\b/;
+  const fillerOnly = /\b(um|uma|uns|umas|o|a|os|as|de|do|da|com|sem|e|copo|xicara|prato|pedaco|pedaço|fatia|porcao)\b/g;
+  const meaningfulContent = normalized.replace(fillerOnly, " ").replace(/\s+/g, " ").trim();
+
+  if (!foodOrDrinkTerms.test(normalized)) return null;
+  if (meaningfulContent.split(" ").filter(Boolean).length > 4) return null;
+
+  const subject = text.trim().replace(/\s+/g, " ");
+  const asksCalories = /caloria|kcal|engorda|emagrece/.test(normalized);
+  const asksMacro = /proteina|carbo|gordura|fibra/.test(normalized);
+  const asksRoutine = /quantas vezes|frequencia|frequ[eê]ncia|todo dia|diario|di[aá]rio/.test(normalized);
+
+  if (asksCalories) {
+    return (
+      `🥗 Posso te ajudar com *${subject}*.` +
+      "\nMe diga a quantidade aproximada para eu estimar melhor as calorias." +
+      `\nExemplo: *2 fatias de ${subject}*`
+    );
+  }
+
+  if (asksMacro) {
+    return (
+      `🥗 Ótimo ponto sobre *${subject}*.` +
+      "\nVocê quer foco em qual parte?" +
+      "\n• proteína" +
+      "\n• carboidrato" +
+      "\n• gordura/fibra" +
+      `\n\nSe quiser, já mando um resumo completo de *${subject}*.`
+    );
+  }
+
+  if (asksRoutine) {
+    return (
+      `🥗 Consigo te orientar sobre frequência de consumo de *${subject}*.` +
+      "\nMe diga seu objetivo: manter peso, emagrecer ou ganhar massa." +
+      `\nAí eu te passo uma recomendação prática para *${subject}*.`
+    );
+  }
+
+  return (
+    `🥗 Posso te ajudar com *${subject}*, mas sua pergunta ficou aberta.\n\n` +
+    `O que você quer saber?\n` +
+    `• calorias\n` +
+    `• se faz bem\n` +
+    `• frequência/quantidade ideal\n` +
+    `• outra dúvida\n\n` +
+    `Se quiser, pode mandar assim: *quantas calorias tem ${subject}?*`
+  );
+}
+
+async function resolveNutritionAnswer(text: string, history: AIMessage[]): Promise<string | null> {
+  const nutritionAnswer = await analyzeNutrition(text, history);
+  if (nutritionAnswer) return nutritionAnswer;
+
+  return findKnowledgeAnswer(text);
 }
 
 // ─── Comando: listar contas pendentes ─────────────────────────────────────────
@@ -997,6 +1128,62 @@ async function cmdListPaid(phone: string): Promise<string> {
   return msg;
 }
 
+// ─── Mapear método de pagamento do texto ──────────────────────────────────────
+function parsePaymentMethod(text: string): string | null {
+  const t = text.toLowerCase().trim();
+  if (/cr[ée]d(ito)?/.test(t) || /cart[aã]o\s+(de\s+)?cr[ée]d/.test(t)) return "CREDITO";
+  if (/d[ée]b(ito)?/.test(t) || /cart[aã]o\s+(de\s+)?d[ée]b/.test(t)) return "DEBITO";
+  if (/dinheiro|espécie|especie|cash/.test(t)) return "DINHEIRO";
+  if (/pix/.test(t)) return "PIX";
+  if (/^[12]$/.test(t.trim())) return t.trim() === "1" ? "CREDITO" : "DEBITO";
+  if (/^3$/.test(t.trim())) return "PIX";
+  if (/^4$/.test(t.trim())) return "DINHEIRO";
+  return null;
+}
+
+function paymentMethodLabel(method: string | null): string {
+  if (method === "CREDITO") return "💳 Cartão de Crédito";
+  if (method === "DEBITO") return "💳 Cartão de Débito";
+  if (method === "DINHEIRO") return "💵 Dinheiro";
+  if (method === "PIX") return "⚡ Pix";
+  return "—";
+}
+
+// ─── Executar marcação como pago ──────────────────────────────────────────────
+async function executeMarkPaid(
+  phone: string,
+  id: number,
+  tipo: string,
+  valor: { toNumber(): number } | number,
+  paymentMethod: string,
+): Promise<string> {
+  const valorNum = typeof valor === "number" ? valor : valor.toNumber();
+
+  await prisma.financialTransaction.update({
+    where: { id },
+    data: { status: "PAGO", paidAt: new Date(), paymentMethod },
+  });
+
+  // Cancela lembretes pendentes
+  await prisma.reminderJob.updateMany({
+    where: { transactionId: id, status: "PENDING" },
+    data: { status: "SKIPPED" },
+  });
+
+  // Limpa estado pendente
+  await prisma.whatsappUser.update({
+    where: { phone },
+    data: { registrationData: {}, registrationStep: null },
+  });
+
+  return (
+    `✅ *${tipo}* marcado como pago!\n` +
+    `💰 ${formatCurrency(valorNum)}\n` +
+    `${paymentMethodLabel(paymentMethod)}\n` +
+    `📅 Pago em: ${formatDate(new Date())}`
+  );
+}
+
 // ─── Comando: marcar como pago ────────────────────────────────────────────────
 async function cmdMarkPaid(phone: string, text: string): Promise<string> {
   const match = text.match(/#?(\d+)/);
@@ -1017,18 +1204,30 @@ async function cmdMarkPaid(phone: string, text: string): Promise<string> {
     return `ℹ️ A conta *${t.tipo}* (${formatCurrency(t.valor)}) já está marcada como paga.`;
   }
 
-  await prisma.financialTransaction.update({
-    where: { id },
-    data: { status: "PAGO", paidAt: new Date() },
-  });
+  // Tenta extrair método de pagamento da mensagem ("paguei #3 crédito")
+  const inlineMethod = parsePaymentMethod(text);
 
-  // Cancela lembretes pendentes
-  await prisma.reminderJob.updateMany({
-    where: { transactionId: id, status: "PENDING" },
-    data: { status: "SKIPPED" },
-  });
+  if (!inlineMethod) {
+    // Nenhum método informado → salva estado pendente e pergunta
+    await prisma.whatsappUser.update({
+      where: { phone },
+      data: {
+        registrationData: { pendingPaymentId: id },
+        registrationStep: "pending_payment_method",
+      },
+    });
+    return (
+      `✅ Conta *#${id} — ${t.tipo}* (${formatCurrency(t.valor)}) localizada!\n\n` +
+      `💳 Como foi o pagamento?\n\n` +
+      `1️⃣ *crédito* — Cartão de Crédito\n` +
+      `2️⃣ *débito* — Cartão de Débito\n` +
+      `3️⃣ *pix* — Pix\n` +
+      `4️⃣ *dinheiro* — Dinheiro / Espécie\n\n` +
+      `_Responda com uma das opções acima_`
+    );
+  }
 
-  return `✅ *${t.tipo}* marcado como pago!\n💰 ${formatCurrency(t.valor)}\n📅 Pago em: ${formatDate(new Date())}`;
+  return await executeMarkPaid(phone, id, t.tipo, t.valor, inlineMethod);
 }
 
 // ─── Comando: resumo financeiro ───────────────────────────────────────────────
@@ -1046,15 +1245,17 @@ async function cmdSummary(phone: string): Promise<string> {
   const totalReceber = pending.filter((t) => t.natureza === "RECEBER").reduce((s, t) => s + t.valor.toNumber(), 0);
   const totalPago = paid.filter((t) => t.natureza === "PAGAR").reduce((s, t) => s + t.valor.toNumber(), 0);
   const saldo = totalReceber - totalPagar;
+  const qtdPagar = pending.filter((t) => t.natureza === "PAGAR").length;
+  const qtdReceber = pending.filter((t) => t.natureza === "RECEBER").length;
 
   return (
-    `📊 *Resumo Financeiro*\n\n` +
-    `💸 A Pagar: *${formatCurrency(totalPagar)}* (${pending.filter((t) => t.natureza === "PAGAR").length})\n` +
-    `💰 A Receber: *${formatCurrency(totalReceber)}* (${pending.filter((t) => t.natureza === "RECEBER").length})\n` +
-    `✅ Pago: *${formatCurrency(totalPago)}*\n` +
-    (overdue.length > 0 ? `🔴 Vencidas: *${overdue.length} conta(s)*\n` : "") +
-    `\n${saldo >= 0 ? "📈" : "📉"} Saldo projetado: *${formatCurrency(saldo)}*\n\n` +
-    `_Use *ver contas* para detalhes_`
+    `📊 *Acabei de fechar seu resumo:*\n\n` +
+    `• 💸 A pagar: *${formatCurrency(totalPagar)}* em *${qtdPagar}* conta(s)\n` +
+    `• 💰 A receber: *${formatCurrency(totalReceber)}* em *${qtdReceber}* conta(s)\n` +
+    `• ✅ Já pago: *${formatCurrency(totalPago)}*\n` +
+    (overdue.length > 0 ? `• 🔴 Vencidas: *${overdue.length}*\n` : "") +
+    `\n${saldo >= 0 ? "📈" : "📉"} Saldo projetado de hoje: *${formatCurrency(saldo)}*\n\n` +
+    `Se quiser, já te mostro os detalhes. É só enviar *ver contas*.`
   );
 }
 
@@ -1155,16 +1356,44 @@ async function scheduleReminders(phone: string, transactionId: number, venciment
 
 // ─── Processar mensagem de texto ──────────────────────────────────────────────
 export async function processText(phone: string, senderName: string | undefined, text: string) {
-  const user = await getOrCreateUser(phone, senderName);
+  const identity = await resolveWhatsappIdentity(phone);
+  const canonicalPhone = identity.canonicalPhone || phone;
+  const user = await getOrCreateUser(canonicalPhone, senderName, identity.aliases);
 
   // Gate 1: cadastro completo + Gate 2: plano ativo
-  const intercepted = await handleOnboarding(user, phone, text);
+  const intercepted = await handleOnboarding(user, canonicalPhone, text, identity.aliases);
   if (intercepted) return;
+
+
+  // Gate 3: resposta a método de pagamento pendente
+  if (user.registrationStep === "pending_payment_method") {
+    const regData = (user.registrationData ?? {}) as Record<string, unknown>;
+    const pendingId = typeof regData.pendingPaymentId === "number" ? regData.pendingPaymentId : null;
+    const method = parsePaymentMethod(text);
+    if (pendingId !== null && method) {
+      const t = await prisma.financialTransaction.findFirst({
+        where: { id: pendingId, userPhone: canonicalPhone },
+      });
+      if (t && t.status !== "PAGO") {
+        const result = await executeMarkPaid(canonicalPhone, pendingId, t.tipo, t.valor, method);
+        await sendMessage(canonicalPhone, result);
+        return;
+      }
+    }
+    if (!method) {
+      await sendMessage(
+        canonicalPhone,
+        `❓ Não entendi. Responda com uma das opções:\n\n` +
+        `1️⃣ *crédito*\n2️⃣ *débito*\n3️⃣ *pix*\n4️⃣ *dinheiro*`,
+      );
+      return;
+    }
+  }
 
   const history = parseContext(user.conversationContext);
   const command = detectCommand(text);
   const clientProfile = await prisma.clientProfile.findUnique({
-    where: { phone },
+    where: { phone: canonicalPhone },
     select: { plan: true },
   });
   const isBasicPlan = clientProfile?.plan !== "FULL";
@@ -1174,13 +1403,13 @@ export async function processText(phone: string, senderName: string | undefined,
   if (command === "help") {
     response = cmdHelp(text, senderName);
   } else if (command === "list_pending") {
-    response = await cmdListPending(phone);
+    response = await cmdListPending(canonicalPhone);
   } else if (command === "list_paid") {
-    response = await cmdListPaid(phone);
+    response = await cmdListPaid(canonicalPhone);
   } else if (command === "mark_paid") {
-    response = await cmdMarkPaid(phone, text);
+    response = await cmdMarkPaid(canonicalPhone, text);
   } else if (command === "summary") {
-    response = await cmdSummary(phone);
+    response = await cmdSummary(canonicalPhone);
   } else if (command === "report_email") {
     const email = extractEmailFromText(text);
 
@@ -1193,19 +1422,19 @@ export async function processText(phone: string, senderName: string | undefined,
         "_Leva alguns segundos para juntar os dados e concluir o envio._";
     } else {
       await sendMessage(
-        phone,
-        `📨 Recebi seu pedido. Estou preparando seu resumo em PDF para *${email}*. ` +
+        canonicalPhone,
+        `📨 Recebi seu pedido. Estou preparando seu resumo em PDF para o e-mail ${email}. ` +
           "Aguarde mais alguns instantes enquanto junto os dados.",
       );
-      const reportResult = await sendFinancialReportNow(phone, email);
+      const reportResult = await sendFinancialReportNow(canonicalPhone, email);
       response = reportResult.message;
     }
   } else if (command === "report_now") {
     await sendMessage(
-      phone,
+      canonicalPhone,
       "📄 Estou gerando seu relatório agora. Esse processo leva alguns segundos. Aguarde mais alguns instantes.",
     );
-    const reportResult = await sendFinancialReportNow(phone);
+    const reportResult = await sendFinancialReportNow(canonicalPhone);
     response = reportResult.message;
   } else if (command === "market_help") {
     response = isBasicPlan
@@ -1216,18 +1445,45 @@ export async function processText(phone: string, senderName: string | undefined,
       ? "🔒 Consulta FIPE disponível apenas no plano *Completo (R$ 9,90)*.\n\nNo plano básico você pode usar contas a pagar e a receber normalmente."
       : getFipeHelp();
   } else {
+    if (isNutritionQuery(text)) {
+      response =
+        (await resolveNutritionAnswer(text, history)) ??
+        "🥗 Posso analisar alimentos, calorias e frequência de consumo, mas preciso que você diga o alimento e, se possível, a quantidade.\n\nExemplo: *2 ovos, arroz, feijão e bife no almoço*";
+
+      await saveContext(canonicalPhone, [
+        ...history,
+        { role: "user", content: text },
+        { role: "assistant", content: response },
+      ]);
+
+      await sendMessage(canonicalPhone, response);
+      return;
+    }
+
+    const nutritionClarification = getNutritionClarificationPrompt(text);
+    if (nutritionClarification) {
+      await saveContext(canonicalPhone, [
+        ...history,
+        { role: "user", content: text },
+        { role: "assistant", content: nutritionClarification },
+      ]);
+
+      await sendMessage(canonicalPhone, nutritionClarification);
+      return;
+    }
+
     // ── Consulta FIPE (antes da IA) ───────────────────────────────────────────
     const fipeQuery = detectFipeQuery(text);
     if (fipeQuery) {
       if (isBasicPlan) {
         await sendMessage(
-          phone,
+          canonicalPhone,
           "🔒 A consulta FIPE é um recurso do plano *Completo (R$ 9,90)*.\n\nSeu plano atual continua com contas a pagar/receber para PF e PJ.",
         );
         return;
       }
-      const fipeResult = await queryFipe(phone, fipeQuery.query, fipeQuery.vehicleType);
-      await sendMessage(phone, fipeResult.message);
+      const fipeResult = await queryFipe(canonicalPhone, fipeQuery.query, fipeQuery.vehicleType);
+      await sendMessage(canonicalPhone, fipeResult.message);
       return;
     }
 
@@ -1236,13 +1492,13 @@ export async function processText(phone: string, senderName: string | undefined,
     if (marketQuery) {
       if (isBasicPlan) {
         await sendMessage(
-          phone,
+          canonicalPhone,
           "🔒 Mercado Financeiro é um recurso do plano *Completo (R$ 9,90)*.\n\nSeu plano atual continua com contas a pagar/receber para PF e PJ.",
         );
         return;
       }
       response = await executeMarketQuery(marketQuery);
-      await sendMessage(phone, response);
+      await sendMessage(canonicalPhone, response);
       return;
     }
     // Extração via IA tem prioridade — determina contextos permitidos pelo plano
@@ -1258,7 +1514,7 @@ export async function processText(phone: string, senderName: string | undefined,
 
       const created = await prisma.financialTransaction.create({
         data: {
-          userPhone: phone,
+          userPhone: canonicalPhone,
           tipo: extracted.tipo,
           valor: extracted.valor,
           natureza: extracted.natureza,
@@ -1279,7 +1535,7 @@ export async function processText(phone: string, senderName: string | undefined,
       }
 
       await prisma.whatsappUser.update({
-        where: { phone },
+        where: { phone: canonicalPhone },
         data: { totalTransactions: { increment: 1 } },
       });
 
@@ -1295,29 +1551,35 @@ export async function processText(phone: string, senderName: string | undefined,
         ? `\n📅 Vencimento: *${vencimentoDate.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}*`
         : "";
       response =
-        `${tipoIcon} *${naturezaLabel.charAt(0).toUpperCase() + naturezaLabel.slice(1)} registrado!*\n\n` +
+        `Perfeito! Já deixei isso registrado pra você. ✅\n\n` +
+        `${tipoIcon} Tipo: *${naturezaLabel}*\n` +
         `💰 Valor: *${formatCurrency(extracted.valor)}*\n` +
-        `🏷️ Item: *${extracted.tipo}*\n` +
-        `📂 Categoria: *${extracted.categoria}* [${extracted.contexto}]\n` +
-        `🕐 Data/Hora: *${dataHora}*` +
+        `🏷️ Descrição: *${extracted.tipo}*\n` +
+        `📂 Categoria: *${extracted.categoria}* (${extracted.contexto.toLowerCase()})\n` +
+        `🕐 Registro: *${dataHora}*` +
         vencLine +
-        `\n🆔 #${created.id}\n\n` +
-        `_Para consultar seus gastos, envie: "resumo" ou "ver contas"_`;
+        `\n🆔 ID: *#${created.id}*\n\n` +
+        `Se quiser conferir agora, pode mandar *resumo* ou *ver contas*.`;
     } else {
       // Sem transação — tenta base de conhecimento antes de responder com a IA
-      const knowledgeAnswer = await findKnowledgeAnswer(text);
-      response = knowledgeAnswer ?? extracted.responseMessage;
+      const nutritionClarification = getNutritionClarificationPrompt(text);
+      if (nutritionClarification) {
+        response = nutritionClarification;
+      } else {
+        const knowledgeAnswer = await findKnowledgeAnswer(text);
+        response = knowledgeAnswer ?? extracted.responseMessage;
+      }
     }
   }
 
   // Salva contexto
-  await saveContext(phone, [
+  await saveContext(canonicalPhone, [
     ...history,
     { role: "user", content: text },
     { role: "assistant", content: response },
   ]);
 
-  await sendMessage(phone, response);
+  await sendMessage(canonicalPhone, response);
 }
 
 // ─── Processar áudio a partir de buffer (QR-paired / Baileys) ────────────────
@@ -1328,21 +1590,23 @@ export async function processAudioBuffer(
   mimeType: string,
   mediaId = "local"
 ) {
-  const user = await getOrCreateUser(phone, senderName);
-  const intercepted = await handleOnboarding(user, phone, "[áudio]");
+  const identity = await resolveWhatsappIdentity(phone);
+  const canonicalPhone = identity.canonicalPhone || phone;
+  const user = await getOrCreateUser(canonicalPhone, senderName, identity.aliases);
+  const intercepted = await handleOnboarding(user, canonicalPhone, "[áudio]", identity.aliases);
   if (intercepted) return;
 
   const audioDir = config.storage.audioPath;
   if (!fs.existsSync(audioDir)) fs.mkdirSync(audioDir, { recursive: true });
 
   const ext = mimeType.includes("mp4") ? "mp4" : "ogg";
-  const filename = `${phone}_${Date.now()}_${mediaId}.${ext}`;
+  const filename = `${canonicalPhone}_${Date.now()}_${mediaId}.${ext}`;
   const audioPath = path.join(audioDir, filename);
   fs.writeFileSync(audioPath, audioBuffer);
 
   const audioRecord = await prisma.audioMessage.create({
     data: {
-      userPhone: phone,
+      userPhone: canonicalPhone,
       storageKey: filename,
       storageUrl: `/storage/audios/${filename}`,
       mimeType,
@@ -1350,10 +1614,11 @@ export async function processAudioBuffer(
     },
   });
 
-  await sendMessage(phone, "🎤 Recebi seu áudio! Transcrevendo...");
+  await sendMessage(canonicalPhone, "🎤 Recebi seu áudio! Transcrevendo...");
+
 
   const history = parseContext(user.conversationContext);
-  const cp = await prisma.clientProfile.findUnique({ where: { phone }, select: { plan: true } });
+  const cp = await prisma.clientProfile.findUnique({ where: { phone: canonicalPhone }, select: { plan: true } });
   const allowedContexts: ("PESSOAL" | "COMERCIAL")[] =
     cp?.plan === "OFFICE" ? ["PESSOAL", "COMERCIAL"] : ["PESSOAL", "COMERCIAL"];
 
@@ -1364,7 +1629,7 @@ export async function processAudioBuffer(
     transcription = await transcribeAudio(audioPath);
 
     if (!transcription) {
-      await sendMessage(phone, "⚠️ Não consegui transcrever o áudio. Envie em texto.\n\nExemplo: *luz 150 dia 20*");
+      await sendMessage(canonicalPhone, "⚠️ Não consegui transcrever o áudio. Envie em texto.\n\nExemplo: *luz 150 dia 20*");
       return;
     }
 
@@ -1375,12 +1640,17 @@ export async function processAudioBuffer(
   await prisma.audioMessage.update({ where: { id: audioRecord.id }, data: { transcription } });
 
   let response: string;
-  if (!extracted.needsMoreInfo && extracted.valor !== null && extracted.valor > 0) {
+  if (transcription && isNutritionQuery(transcription)) {
+    const nutritionResponse = await resolveNutritionAnswer(transcription, history);
+    response = nutritionResponse
+      ? `🎤 _"${transcription}"_\n\n${nutritionResponse}`
+      : `🎤 _"${transcription}"_\n\n🥗 Consigo analisar calorias e se a refeição é saudável, mas preciso do alimento e de uma quantidade aproximada.`;
+  } else if (!extracted.needsMoreInfo && extracted.valor !== null && extracted.valor > 0) {
     const now = new Date();
     const vencimentoDate = extracted.vencimento ? new Date(extracted.vencimento + "T12:00:00Z") : null;
     const created = await prisma.financialTransaction.create({
       data: {
-        userPhone: phone,
+          userPhone: canonicalPhone,
         tipo: extracted.tipo,
         valor: extracted.valor,
         natureza: extracted.natureza,
@@ -1399,8 +1669,8 @@ export async function processAudioBuffer(
     });
 
     await prisma.audioMessage.update({ where: { id: audioRecord.id }, data: { transactionId: created.id } });
-    if (vencimentoDate) await scheduleReminders(phone, created.id, vencimentoDate);
-    await prisma.whatsappUser.update({ where: { phone }, data: { totalTransactions: { increment: 1 } } });
+    if (vencimentoDate) await scheduleReminders(canonicalPhone, created.id, vencimentoDate);
+    await prisma.whatsappUser.update({ where: { phone: canonicalPhone }, data: { totalTransactions: { increment: 1 } } });
 
     const tipoIcon = extracted.natureza === "PAGAR" ? "💸" : "💰";
     const naturezaLabel = extracted.natureza === "PAGAR" ? "Gasto" : "Recebimento";
@@ -1408,20 +1678,24 @@ export async function processAudioBuffer(
     const vencLine = vencimentoDate ? `\n📅 Vencimento: *${vencimentoDate.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}*` : "";
     const audioHeader = transcription ? `🎤 _"${transcription}"_\n\n` : "🎤 *Áudio processado com sucesso!*\n\n";
     response =
-      `${audioHeader}${tipoIcon} *${naturezaLabel} registrado!*\n\n` +
+      `${audioHeader}Perfeito, registrei com base no seu áudio. ✅\n\n` +
+      `${tipoIcon} Tipo: *${naturezaLabel.toLowerCase()}*\n` +
       `💰 Valor: *${formatCurrency(extracted.valor!)}*\n` +
-      `🏷️ Item: *${extracted.tipo}*\n` +
-      `📂 Categoria: *${extracted.categoria}* [${extracted.contexto}]\n` +
-      `🕐 Data/Hora: *${dataHora}*${vencLine}\n🆔 #${created.id}\n\n` +
-      `_Para consultar: envie "resumo" ou "ver contas"_`;
+      `🏷️ Descrição: *${extracted.tipo}*\n` +
+      `📂 Categoria: *${extracted.categoria}* (${extracted.contexto.toLowerCase()})\n` +
+      `🕐 Registro: *${dataHora}*${vencLine}\n🆔 ID: *#${created.id}*\n\n` +
+      `Se quiser, eu já te mostro um *resumo* ou a lista com *ver contas*.`;
   } else {
-    response = transcription
-      ? `🎤 _"${transcription}"_\n\n${extracted.responseMessage}`
-      : `🎤 *Áudio processado*\n\n${extracted.responseMessage}`;
+    const nutritionClarification = transcription ? getNutritionClarificationPrompt(transcription) : null;
+    response = nutritionClarification
+      ? `🎤 _"${transcription}"_\n\n${nutritionClarification}`
+      : transcription
+        ? `🎤 _"${transcription}"_\n\n${extracted.responseMessage}`
+        : `🎤 *Áudio processado*\n\n${extracted.responseMessage}`;
   }
 
-  await saveContext(phone, [...history, { role: "user", content: `[áudio] ${transcription || "sem transcrição textual"}` }, { role: "assistant", content: response }]);
-  await sendMessage(phone, response);
+  await saveContext(canonicalPhone, [...history, { role: "user", content: `[áudio] ${transcription || "sem transcrição textual"}` }, { role: "assistant", content: response }]);
+  await sendMessage(canonicalPhone, response);
 }
 
 // ─── Processar mensagem de áudio ──────────────────────────────────────────────
@@ -1431,16 +1705,18 @@ export async function processAudio(
   mediaId: string,
   mimeType: string
 ) {
-  const user = await getOrCreateUser(phone, senderName);
+  const identity = await resolveWhatsappIdentity(phone);
+  const canonicalPhone = identity.canonicalPhone || phone;
+  const user = await getOrCreateUser(canonicalPhone, senderName, identity.aliases);
 
   // Gate: cadastro completo + plano ativo
-  const intercepted = await handleOnboarding(user, phone, "[áudio]");
+  const intercepted = await handleOnboarding(user, canonicalPhone, "[áudio]", identity.aliases);
   if (intercepted) return;
 
   // Baixa o áudio
   const media = await downloadMedia(mediaId);
   if (!media) {
-    await sendMessage(phone, "⚠️ Não consegui baixar seu áudio. Tente enviar uma mensagem de texto.");
+    await sendMessage(canonicalPhone, "⚠️ Não consegui baixar seu áudio. Tente enviar uma mensagem de texto.");
     return;
   }
 
@@ -1449,14 +1725,14 @@ export async function processAudio(
   if (!fs.existsSync(audioDir)) fs.mkdirSync(audioDir, { recursive: true });
 
   const ext = mimeType.includes("ogg") ? "ogg" : mimeType.includes("mp4") ? "mp4" : "ogg";
-  const filename = `${phone}_${Date.now()}_${mediaId}.${ext}`;
+  const filename = `${canonicalPhone}_${Date.now()}_${mediaId}.${ext}`;
   const audioPath = path.join(audioDir, filename);
   fs.writeFileSync(audioPath, media.buffer);
 
   // Salva registro do áudio
   const audioRecord = await prisma.audioMessage.create({
     data: {
-      userPhone: phone,
+      userPhone: canonicalPhone,
       storageKey: filename,
       storageUrl: `/storage/audios/${filename}`,
       mimeType: media.mimeType,
@@ -1464,13 +1740,13 @@ export async function processAudio(
     },
   });
 
-  await sendMessage(phone, "🎤 Recebi seu áudio! Processando...");
+  await sendMessage(canonicalPhone, "🎤 Recebi seu áudio! Processando...");
 
   // Extrai transação da transcrição
   const history = parseContext(user.conversationContext);
 
   const audioClientProfile = await prisma.clientProfile.findUnique({
-    where: { phone },
+    where: { phone: canonicalPhone },
     select: { plan: true },
   });
   const audioAllowedContexts: ("PESSOAL" | "COMERCIAL")[] =
@@ -1484,7 +1760,7 @@ export async function processAudio(
 
     if (!transcription) {
       await sendMessage(
-        phone,
+        canonicalPhone,
         "⚠️ Não consegui transcrever o áudio. Por favor, envie uma mensagem de texto.\n\nExemplo: *luz 150 dia 20*"
       );
       return;
@@ -1501,12 +1777,17 @@ export async function processAudio(
 
   let response: string;
 
-  if (!extracted.needsMoreInfo && extracted.valor !== null && extracted.valor > 0) {
+  if (transcription && isNutritionQuery(transcription)) {
+    const nutritionResponse = await resolveNutritionAnswer(transcription, history);
+    response = nutritionResponse
+      ? `🎤 _"${transcription}"_\n\n${nutritionResponse}`
+      : `🎤 _"${transcription}"_\n\n🥗 Consigo analisar calorias e se a refeição é saudável, mas preciso do alimento e de uma quantidade aproximada.`;
+  } else if (!extracted.needsMoreInfo && extracted.valor !== null && extracted.valor > 0) {
     const nowAudio = new Date();
     const vencimentoDate = extracted.vencimento ? new Date(extracted.vencimento + "T12:00:00Z") : null;
     const created = await prisma.financialTransaction.create({
       data: {
-        userPhone: phone,
+          userPhone: canonicalPhone,
         tipo: extracted.tipo,
         valor: extracted.valor,
         natureza: extracted.natureza,
@@ -1531,11 +1812,11 @@ export async function processAudio(
     });
 
     if (vencimentoDate) {
-      await scheduleReminders(phone, created.id, vencimentoDate);
+      await scheduleReminders(canonicalPhone, created.id, vencimentoDate);
     }
 
     await prisma.whatsappUser.update({
-      where: { phone },
+      where: { phone: canonicalPhone },
       data: { totalTransactions: { increment: 1 } },
     });
 
@@ -1553,25 +1834,29 @@ export async function processAudio(
     const audioHeader = transcription ? `🎤 _"${transcription}"_\n\n` : "🎤 *Áudio processado com sucesso!*\n\n";
     response =
       `${audioHeader}` +
-      `${tipoIconA} *${naturezaLabelA.charAt(0).toUpperCase() + naturezaLabelA.slice(1)} registrado!*\n\n` +
+      `Perfeito, registrei com base no seu áudio. ✅\n\n` +
+      `${tipoIconA} Tipo: *${naturezaLabelA}*\n` +
       `💰 Valor: *${formatCurrency(extracted.valor!)}*\n` +
-      `🏷️ Item: *${extracted.tipo}*\n` +
-      `📂 Categoria: *${extracted.categoria}* [${extracted.contexto}]\n` +
-      `🕐 Data/Hora: *${dataHoraA}*` +
+      `🏷️ Descrição: *${extracted.tipo}*\n` +
+      `📂 Categoria: *${extracted.categoria}* (${extracted.contexto.toLowerCase()})\n` +
+      `🕐 Registro: *${dataHoraA}*` +
       vencLineA +
-      `\n🆔 #${created.id}\n\n` +
-      `_Para consultar seus gastos, envie: "resumo" ou "ver contas"_`;
+      `\n🆔 ID: *#${created.id}*\n\n` +
+      `Se quiser, eu já te mostro um *resumo* ou a lista com *ver contas*.`;
   } else {
-    response = transcription
-      ? `🎤 _"${transcription}"_\n\n${extracted.responseMessage}`
-      : `🎤 *Áudio processado*\n\n${extracted.responseMessage}`;
+    const nutritionClarification = transcription ? getNutritionClarificationPrompt(transcription) : null;
+    response = nutritionClarification
+      ? `🎤 _"${transcription}"_\n\n${nutritionClarification}`
+      : transcription
+        ? `🎤 _"${transcription}"_\n\n${extracted.responseMessage}`
+        : `🎤 *Áudio processado*\n\n${extracted.responseMessage}`;
   }
 
-  await saveContext(phone, [
+  await saveContext(canonicalPhone, [
     ...history,
     { role: "user", content: `[áudio] ${transcription || "sem transcrição textual"}` },
     { role: "assistant", content: response },
   ]);
 
-  await sendMessage(phone, response);
+  await sendMessage(canonicalPhone, response);
 }
