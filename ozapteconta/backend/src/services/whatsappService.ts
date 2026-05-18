@@ -2,6 +2,7 @@ import axios from "axios";
 import FormData from "form-data";
 import { prisma } from "../config/prisma";
 import { logger } from "../utils/logger";
+import { prepareWhatsAppText } from "../utils/whatsappText";
 import { whatsappQrPairingService } from "./whatsappQrPairingService";
 
 interface WppConfig {
@@ -112,49 +113,62 @@ async function getConfig(): Promise<WppConfig | null> {
 
 // ─── Enviar mensagem de texto ─────────────────────────────────────────────────
 export async function sendMessage(to: string, text: string): Promise<boolean> {
+  const textoUtf8 = prepareWhatsAppText(text);
   const cfg = await getConfig();
   if (!cfg) {
-    const sentViaQr = await whatsappQrPairingService.sendMessageUsingConnectedSession(to, text);
-    if (sentViaQr) {
-      logger.info(`[WhatsApp] Mensagem enviada por sessão QR pareada para ${to}`);
-      return true;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const sentViaQr = await whatsappQrPairingService.sendMessageUsingConnectedSession(to, textoUtf8);
+      if (sentViaQr) {
+        logger.info(`[WhatsApp] Mensagem enviada por sessão QR pareada para ${to} (tentativa ${attempt})`);
+        return true;
+      }
+
+      if (attempt < 3) {
+        await sleep(1200);
+      }
     }
 
-    logger.warn(`[WhatsApp] Sem API oficial ativa e sem sessão QR conectada. Mensagem NÃO enviada para ${to}: ${text.substring(0, 60)}`);
+    logger.warn(`[WhatsApp] Sem API oficial ativa e sem sessão QR conectada. Mensagem NÃO enviada para ${to}: ${textoUtf8.substring(0, 60)}`);
     return false;
   }
 
-  try {
-    await maybeApplyHumanizedDelay(text);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await maybeApplyHumanizedDelay(textoUtf8);
 
-    const res = await fetch(`${cfg.apiBase}/${cfg.phoneNumberId}/messages`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${cfg.accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        recipient_type: "individual",
-        to: to.replace(/\D/g, ""),
-        type: "text",
-        text: { body: text, preview_url: false },
-      }),
-      signal: AbortSignal.timeout(15000),
-    });
+      const res = await fetch(`${cfg.apiBase}/${cfg.phoneNumberId}/messages`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${cfg.accessToken}`,
+          "Content-Type": "application/json; charset=utf-8",
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: to.replace(/\D/g, ""),
+          type: "text",
+          text: { body: textoUtf8, preview_url: false },
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
 
-    if (!res.ok) {
+      if (res.ok) {
+        logger.info(`[WhatsApp] Mensagem enviada para ${to} (tentativa ${attempt})`);
+        return true;
+      }
+
       const err = await res.text();
       logger.error(`[WhatsApp] Falha ao enviar para ${to}: ${res.status} ${err}`);
-      return false;
+    } catch (err) {
+      logger.error(`[WhatsApp] Erro ao enviar para ${to}:`, err);
     }
 
-    logger.info(`[WhatsApp] Mensagem enviada para ${to}`);
-    return true;
-  } catch (err) {
-    logger.error(`[WhatsApp] Erro ao enviar para ${to}:`, err);
-    return false;
+    if (attempt < 3) {
+      await sleep(1200);
+    }
   }
+
+  return false;
 }
 
 export async function sendDocument(
@@ -205,7 +219,7 @@ export async function sendDocument(
         type: "document",
         document: {
           id: mediaId,
-          caption: params.caption,
+          caption: params.caption ? prepareWhatsAppText(params.caption) : undefined,
           filename: params.fileName,
         },
       }),
@@ -260,7 +274,7 @@ export async function sendImageByUrl(
         type: "image",
         image: {
           link: params.imageUrl,
-          caption: params.caption,
+          caption: params.caption ? prepareWhatsAppText(params.caption) : undefined,
         },
       }),
       signal: AbortSignal.timeout(20000),

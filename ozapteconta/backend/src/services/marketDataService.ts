@@ -11,6 +11,12 @@
 
 import { config } from "../config";
 import { logger } from "../utils/logger";
+import {
+  formatNumberPtBr,
+  montarBlocoCotacaoCripto,
+  montarCabecalhoCotacoesMultiplas,
+  WhatsAppEmoji,
+} from "../utils/whatsappText";
 
 // ─── Cache simples em memória ─────────────────────────────────────────────────
 interface CacheEntry<T> {
@@ -48,10 +54,7 @@ async function fetchJSON<T = unknown>(url: string, headers?: Record<string, stri
 }
 
 function fmt(value: number, decimals = 2): string {
-  return value.toLocaleString("pt-BR", {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  });
+  return formatNumberPtBr(value, decimals);
 }
 
 function fmtPct(value: number): string {
@@ -334,17 +337,18 @@ export async function getIGPM(): Promise<string> {
 export async function getBitcoin(): Promise<string> {
   try {
     const b = await mercadoBitcoinTicker("BTC");
-    return (
-      `₿ *Bitcoin (BTC/BRL)*\n` +
-      `Último: R$ ${fmt(b.last, 2)}\n` +
-      `Compra: R$ ${fmt(b.buy, 2)}\n` +
-      `Venda:  R$ ${fmt(b.sell, 2)}\n` +
-      `Máx/Mín hoje: R$ ${fmt(b.high, 2)} / R$ ${fmt(b.low, 2)}\n` +
-      `_Fonte: Mercado Bitcoin_`
-    );
+    return montarBlocoCotacaoCripto({
+      simbolo: "BTC",
+      nomeExibicao: "Bitcoin",
+      ultimo: b.last,
+      compra: b.buy,
+      venda: b.sell,
+      maximo: b.high,
+      minimo: b.low,
+    });
   } catch (e) {
     logger.error("[market] getBitcoin error", e);
-    return "⚠️ Não foi possível obter a cotação do Bitcoin agora.";
+    return `${WhatsAppEmoji.alerta} Não foi possível obter a cotação do Bitcoin agora.`;
   }
 }
 
@@ -352,17 +356,18 @@ export async function getBitcoin(): Promise<string> {
 export async function getEthereum(): Promise<string> {
   try {
     const e = await mercadoBitcoinTicker("ETH");
-    return (
-      `🔷 *Ethereum (ETH/BRL)*\n` +
-      `Último: R$ ${fmt(e.last, 2)}\n` +
-      `Compra: R$ ${fmt(e.buy, 2)}\n` +
-      `Venda:  R$ ${fmt(e.sell, 2)}\n` +
-      `Máx/Mín hoje: R$ ${fmt(e.high, 2)} / R$ ${fmt(e.low, 2)}\n` +
-      `_Fonte: Mercado Bitcoin_`
-    );
+    return montarBlocoCotacaoCripto({
+      simbolo: "ETH",
+      nomeExibicao: "Ethereum",
+      ultimo: e.last,
+      compra: e.buy,
+      venda: e.sell,
+      maximo: e.high,
+      minimo: e.low,
+    });
   } catch (err) {
     logger.error("[market] getEthereum error", err);
-    return "⚠️ Não foi possível obter a cotação do Ethereum agora.";
+    return `${WhatsAppEmoji.alerta} Não foi possível obter a cotação do Ethereum agora.`;
   }
 }
 
@@ -377,16 +382,18 @@ export async function getCrypto(coin: string): Promise<string> {
 
   try {
     const c = await mercadoBitcoinTicker(sym);
-    return (
-      `🪙 *${label} (${sym}/BRL)*\n` +
-      `Último: R$ ${fmt(c.last, 2)}\n` +
-      `Compra: R$ ${fmt(c.buy, 2)} | Venda: R$ ${fmt(c.sell, 2)}\n` +
-      `Máx/Mín hoje: R$ ${fmt(c.high, 2)} / R$ ${fmt(c.low, 2)}\n` +
-      `_Fonte: Mercado Bitcoin_`
-    );
+    return montarBlocoCotacaoCripto({
+      simbolo: sym,
+      nomeExibicao: label,
+      ultimo: c.last,
+      compra: c.buy,
+      venda: c.sell,
+      maximo: c.high,
+      minimo: c.low,
+    });
   } catch (e) {
     logger.error(`[market] getCrypto(${sym}) error`, e);
-    return `⚠️ Não foi possível obter a cotação de ${label} agora.`;
+    return `${WhatsAppEmoji.alerta} Não foi possível obter a cotação de ${label} agora.`;
   }
 }
 
@@ -528,9 +535,32 @@ export async function getMarketSummary(): Promise<string> {
 export interface MarketQuery {
   type:
     | "dollar" | "euro" | "selic" | "ipca" | "igpm"
-    | "bitcoin" | "ethereum" | "crypto" | "stock_b3"
+    | "bitcoin" | "ethereum" | "crypto" | "crypto_multi" | "stock_b3"
     | "stock_global" | "ibovespa" | "summary" | "help_market";
   param?: string; // ticker ou símbolo de cripto
+}
+
+const CRYPTO_ALIASES: Record<string, string> = {
+  bitcoin: "BTC", btc: "BTC",
+  ethereum: "ETH", eth: "ETH",
+  solana: "SOL", sol: "SOL",
+  litecoin: "LTC", ltc: "LTC",
+  ripple: "XRP", xrp: "XRP",
+  cardano: "ADA", ada: "ADA",
+  bnb: "BNB",
+};
+
+function extractCryptoSymbols(text: string): string[] {
+  const found: string[] = [];
+  const cryptoRegex = /\b(bitcoin|btc|ethereum|eth|solana|sol|litecoin|ltc|ripple|xrp|cardano|ada|bnb)\b/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = cryptoRegex.exec(text)) !== null) {
+    const symbol = CRYPTO_ALIASES[match[1]];
+    if (symbol && !found.includes(symbol)) found.push(symbol);
+  }
+
+  return found;
 }
 
 /** Retorna um MarketQuery se o texto for uma consulta de mercado, ou null caso contrário */
@@ -584,6 +614,11 @@ export function detectMarketQuery(text: string): MarketQuery | null {
     return { type: "ibovespa" };
   }
 
+  const cryptoSymbols = extractCryptoSymbols(t);
+  if (cryptoSymbols.length > 1) {
+    return { type: "crypto_multi", param: cryptoSymbols.join(",") };
+  }
+
   // Bitcoin
   if (/\b(bitcoin|btc)\b/.test(t) && !/ethereum|eth/.test(t)) {
     return { type: "bitcoin" };
@@ -597,15 +632,8 @@ export function detectMarketQuery(text: string): MarketQuery | null {
   // Outras criptos: "cotação SOL", "quanto é LTC", "XRP hoje"
   const cryptoMatch = t.match(/\b(cotacao|preco|quanto|valor)?\s*(solana|sol|litecoin|ltc|ripple|xrp|cardano|ada|bnb)\b/);
   if (cryptoMatch) {
-    const aliases: Record<string, string> = {
-      solana: "SOL", sol: "SOL",
-      litecoin: "LTC", ltc: "LTC",
-      ripple: "XRP", xrp: "XRP",
-      cardano: "ADA", ada: "ADA",
-      bnb: "BNB",
-    };
     const key = cryptoMatch[2] as string;
-    return { type: "crypto", param: aliases[key] || key.toUpperCase() };
+    return { type: "crypto", param: CRYPTO_ALIASES[key] || key.toUpperCase() };
   }
 
   // Ação B3: "cotação PETR4", "VALE3 hoje", "ação ITUB4"
@@ -641,6 +669,22 @@ export async function executeMarketQuery(query: MarketQuery): Promise<string> {
     case "bitcoin":    return getBitcoin();
     case "ethereum":   return getEthereum();
     case "crypto":     return getCrypto(query.param || "BTC");
+    case "crypto_multi": {
+      const symbols = (query.param || "")
+        .split(",")
+        .map((s) => s.trim().toUpperCase())
+        .filter(Boolean);
+      const uniqueSymbols = Array.from(new Set(symbols));
+      if (uniqueSymbols.length === 0) return getMarketSummary();
+
+      const responses = await Promise.all(uniqueSymbols.map((symbol) => {
+        if (symbol === "BTC") return getBitcoin();
+        if (symbol === "ETH") return getEthereum();
+        return getCrypto(symbol);
+      }));
+
+      return `${montarCabecalhoCotacoesMultiplas()}\n\n${responses.join("\n\n")}`;
+    }
     case "stock_b3":   return getStockB3(query.param || "PETR4");
     case "stock_global": return getGlobalStock(query.param || "AAPL");
     case "help_market": return getMarketHelp();

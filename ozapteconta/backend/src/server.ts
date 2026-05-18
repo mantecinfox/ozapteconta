@@ -1,3 +1,6 @@
+import { ensureAppUtf8Locale } from "./bootstrap/utf8Locale";
+ensureAppUtf8Locale();
+
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";

@@ -7,6 +7,9 @@ import { prisma } from "../config/prisma";
 import { logger } from "../utils/logger";
 import { processText, processAudioBuffer } from "./messageProcessor";
 import { registerWhatsappIdentityAlias, resolveWhatsappIdentity } from "./whatsappIdentityService";
+import { detectMarketQuery, executeMarketQuery } from "./marketDataService";
+import { classifyIntent, ensureBaselineLessons } from "./aiLearningService";
+import { prepareWhatsAppText } from "../utils/whatsappText";
 
 type PairingStatus = "IDLE" | "PAIRING" | "CONNECTED" | "DISCONNECTED" | "ERROR";
 
@@ -28,6 +31,7 @@ interface SessionState {
 const QR_TYPING_ENABLED = process.env.WPP_QR_TYPING_ENABLED !== "false";
 const QR_TYPING_MIN_MS = Number(process.env.WPP_QR_TYPING_MIN_MS ?? 1500);
 const QR_TYPING_MAX_MS = Number(process.env.WPP_QR_TYPING_MAX_MS ?? 4200);
+const WPP_UNREADABLE_DELAY_MS = Number(process.env.WPP_UNREADABLE_DELAY_MS ?? 12000);
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -41,13 +45,39 @@ function computeTypingDurationMs(text: string): number {
   return clamp(base + multilineBonus + jitter, QR_TYPING_MIN_MS, QR_TYPING_MAX_MS);
 }
 
+function safeUnreadableDelayMs(): number {
+  return clamp(WPP_UNREADABLE_DELAY_MS, 8000, 30000);
+}
+
 class WhatsappQrPairingService {
   private sessions = new Map<number, SessionState>();
   private processedMessageIds = new Set<string>();
+  private recentTextByPhone = new Map<string, { normalized: string; at: number }>();
   private unreadableNoticeAt = new Map<string, number>();
   private unreadableMessageTimers = new Map<string, NodeJS.Timeout>();
   private unreadableTimersByRemote = new Map<string, Set<string>>();
   private readonly maxReconnectWindowMs = 250 * 24 * 60 * 60 * 1000; // 250 dias
+
+  private static readonly FALLBACK_TEXT_KEYS = new Set([
+    "text",
+    "body",
+    "displayText",
+    "hydratedContentText",
+    "caption",
+    "title",
+    "description",
+    "contentText",
+    "content",
+    "message",
+    "paramsJson",
+    "selectedDisplayText",
+    "selectedButtonId",
+    "selectedId",
+    "selectedRowId",
+    "id",
+    "name",
+    "conversation",
+  ]);
 
   private unreadableTimerKey(accountId: number, messageId: string): string {
     return `${accountId}:${messageId}`;
@@ -55,6 +85,32 @@ class WhatsappQrPairingService {
 
   private unreadableRemoteKey(accountId: number, remoteJid: string): string {
     return `${accountId}:${remoteJid}`;
+  }
+
+  private normalizeRecentText(text: string): string {
+    return String(text || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  private shouldSkipRecentDuplicate(phone: string, text: string): boolean {
+    const normalized = this.normalizeRecentText(text);
+    if (!phone || !normalized) return false;
+
+    const now = Date.now();
+    const previous = this.recentTextByPhone.get(phone);
+    this.recentTextByPhone.set(phone, { normalized, at: now });
+
+    if (this.recentTextByPhone.size > 1000) {
+      for (const [key, value] of this.recentTextByPhone.entries()) {
+        if (now - value.at > 10 * 60 * 1000) this.recentTextByPhone.delete(key);
+      }
+    }
+
+    return Boolean(previous && previous.normalized === normalized && now - previous.at < 75_000);
   }
 
   private trackUnreadableTimer(accountId: number, remoteJid: string, timerKey: string): void {
@@ -98,7 +154,7 @@ class WhatsappQrPairingService {
     const key = this.unreadableTimerKey(accountId, messageId);
     this.clearUnreadableFollowUp(accountId, messageId);
 
-    // Aguarda 8s antes de enviar aviso — WhatsApp frequentemente reenvia a mensagem
+    // Aguarda alguns segundos antes de enviar aviso — WhatsApp frequentemente reenvia a mensagem
     // completa dentro desse prazo (protocolo multi-device: "append" antes do "notify").
     const timer = setTimeout(async () => {
       this.unreadableMessageTimers.delete(key);
@@ -107,15 +163,22 @@ class WhatsappQrPairingService {
 
       try {
         const session = this.sessions.get(accountId);
+        const recoveredText = await this.tryRecoverLikelyTextFromContext(remoteJid);
+
+        if (recoveredText) {
+          logger.info(`[WPP QR] Contexto recuperado para ${remoteJid}: ${recoveredText.slice(0, 80)}`);
+          await processText(this.normalizeFromJid(remoteJid), undefined, recoveredText);
+          return;
+        }
+
+        const contextualReply = await this.buildContextualFallbackReply(remoteJid);
         await session?.sock.sendMessage(remoteJid, {
-          text:
-            "Oi! 👋 Recebi sua mensagem mas não consegui ler o conteúdo.\n\n" +
-            "Pode reenviar em *texto simples*? Assim consigo te responder corretamente! 😊",
+          text: contextualReply,
         });
       } catch (replyErr) {
         logger.warn(`[WPP QR] Falha ao enviar aviso de mensagem ilegível (${remoteJid}): ${String(replyErr)}`);
       }
-    }, 8000);
+    }, safeUnreadableDelayMs());
 
     this.unreadableMessageTimers.set(key, timer);
     this.trackUnreadableTimer(accountId, remoteJid, key);
@@ -131,6 +194,138 @@ class WhatsappQrPairingService {
 
     this.unreadableNoticeAt.set(key, now);
     return true;
+  }
+
+  private isLikelyUserText(value: string): boolean {
+    const trimmed = String(value || "").trim();
+    if (!trimmed) return false;
+    if (trimmed.length < 2 || trimmed.length > 500) return false;
+    if (trimmed.includes("@s.whatsapp.net") || trimmed.includes("@lid")) return false;
+    if (/^[A-Za-z0-9_-]{20,}$/.test(trimmed)) return false;
+    return /[A-Za-zÀ-ÿ]/.test(trimmed) || /\d+\s*(reais|r\$|hoje|amanh[ãa]|dia)/i.test(trimmed);
+  }
+
+  private extractFallbackTextFromObject(payload: unknown, depth = 0): string | null {
+    if (depth > 5 || payload === null || payload === undefined) return null;
+
+    if (typeof payload === "string") {
+      const trimmed = payload.trim();
+      return this.isLikelyUserText(trimmed) ? trimmed : null;
+    }
+
+    if (Array.isArray(payload)) {
+      for (const item of payload) {
+        const candidate = this.extractFallbackTextFromObject(item, depth + 1);
+        if (candidate) return candidate;
+      }
+      return null;
+    }
+
+    if (typeof payload !== "object") return null;
+
+    const record = payload as Record<string, unknown>;
+
+    for (const [key, value] of Object.entries(record)) {
+      if (!WhatsappQrPairingService.FALLBACK_TEXT_KEYS.has(key)) continue;
+      if (typeof value !== "string") continue;
+      const trimmed = value.trim();
+      if (this.isLikelyUserText(trimmed)) return trimmed;
+    }
+
+    for (const value of Object.values(record)) {
+      const candidate = this.extractFallbackTextFromObject(value, depth + 1);
+      if (candidate) return candidate;
+    }
+
+    return null;
+  }
+
+  private normalizeRecoveredText(text: string): string {
+    const compact = String(text || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    return compact.slice(0, 500);
+  }
+
+  private parseConversationContext(context: unknown): Array<{ role?: string; content?: string }> {
+    if (!Array.isArray(context)) return [];
+    return context
+      .map((entry) => {
+        const item = entry as Record<string, unknown>;
+        return {
+          role: typeof item.role === "string" ? item.role : undefined,
+          content: typeof item.content === "string" ? item.content : undefined,
+        };
+      })
+      .filter((entry) => entry.content);
+  }
+
+  private async tryRecoverLikelyTextFromContext(remoteJid: string): Promise<string | null> {
+    const identity = await resolveWhatsappIdentity(remoteJid);
+    const candidates = Array.from(new Set([identity.canonicalPhone, remoteJid, ...identity.aliases].filter(Boolean)));
+    if (candidates.length === 0) return null;
+
+    const user = await prisma.whatsappUser.findFirst({
+      where: { phone: { in: candidates } },
+      select: { conversationContext: true },
+    });
+
+    const context = this.parseConversationContext(user?.conversationContext);
+    const recentUserPrompts = context
+      .filter((entry) => entry.role === "user" && entry.content)
+      .map((entry) => String(entry.content || "").trim())
+      .filter(Boolean)
+      .slice(-5)
+      .reverse();
+
+    // Agora usa o classificador evolutivo: qualquer prompt recente que
+    // a IA consiga classificar (nutrition, finance, market, fipe, bmr…)
+    // é reprocessado, não apenas cotação.
+    for (const prompt of recentUserPrompts) {
+      try {
+        const classification = await classifyIntent(prompt);
+        if (classification.intent !== "unknown" && classification.confidence >= 0.5) {
+          return prompt;
+        }
+      } catch {
+        // ignora — tenta o próximo
+      }
+    }
+
+    // Compatibilidade: se nada bateu, ainda tenta detectMarketQuery
+    const marketLike = recentUserPrompts.find((prompt) => detectMarketQuery(prompt));
+    if (marketLike) return marketLike;
+
+    return null;
+  }
+
+  private async buildContextualFallbackReply(remoteJid: string): Promise<string> {
+    try {
+      const recovered = await this.tryRecoverLikelyTextFromContext(remoteJid);
+      if (recovered) {
+        // NÃO responde mais com texto fixo de cotação — devolve o texto
+        // recuperado para o pipeline reprocessar via processText/IA evolutiva.
+        // O caller (scheduleUnreadableFollowUp) já trata `recoveredText`
+        // antes de chamar este método, então aqui só caímos no fallback
+        // genérico se realmente nada foi recuperado.
+        const marketQuery = detectMarketQuery(recovered);
+        if (marketQuery) {
+          const response = await executeMarketQuery(marketQuery);
+          return `Perfeito, vou continuar daqui com base no seu contexto recente:\n\n${response}`;
+        }
+      }
+    } catch (err) {
+      logger.warn(`[WPP QR] Não foi possível montar fallback contextual (${remoteJid}): ${String(err)}`);
+    }
+
+    return (
+      "Recebi sua mensagem mas não consegui ler o conteúdo dessa vez.\n\n" +
+      "Pode reenviar em texto? Funciono com:\n" +
+      "• Financeiro: \"paguei luz 150 dia 20\"\n" +
+      "• Nutrição: \"comi pão com margarina, quantas calorias?\"\n" +
+      "• Cotação: \"dólar hoje\", \"bitcoin\"\n" +
+      "• FIPE: \"fipe gol 2018\""
+    );
   }
 
   private async resolveLidToPhone(session: SessionState, remoteJid: string): Promise<string | null> {
@@ -168,6 +363,11 @@ class WhatsappQrPairingService {
         logger.error("[WPP QR] Erro ao restaurar sessões persistidas", err);
       });
     }, 1500);
+
+    // Garante lições evolutivas mínimas na base.
+    ensureBaselineLessons().catch((err) => {
+      logger.warn(`[WPP QR] Falha garantindo baseline de lições: ${String(err)}`);
+    });
   }
 
   private async restorePersistedSessions(): Promise<void> {
@@ -263,9 +463,39 @@ class WhatsappQrPairingService {
     if (m.videoMessage?.caption) return String(m.videoMessage.caption);
     if (m.documentMessage?.caption) return String(m.documentMessage.caption);
     if (m.buttonsResponseMessage?.selectedDisplayText) return String(m.buttonsResponseMessage.selectedDisplayText);
+    if (m.buttonsResponseMessage?.selectedButtonId) return String(m.buttonsResponseMessage.selectedButtonId);
     if (m.listResponseMessage?.title) return String(m.listResponseMessage.title);
+    if (m.listResponseMessage?.description) return String(m.listResponseMessage.description);
+    if (m.listResponseMessage?.singleSelectReply?.title) return String(m.listResponseMessage.singleSelectReply.title);
     if (m.listResponseMessage?.singleSelectReply?.selectedRowId) return String(m.listResponseMessage.singleSelectReply.selectedRowId);
     if (m.templateButtonReplyMessage?.selectedDisplayText) return String(m.templateButtonReplyMessage.selectedDisplayText);
+    if (m.templateButtonReplyMessage?.selectedId) return String(m.templateButtonReplyMessage.selectedId);
+
+    const interactiveText =
+      m.interactiveResponseMessage?.body?.text ||
+      m.interactiveResponseMessage?.nativeFlowResponseMessage?.name ||
+      m.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson;
+    if (typeof interactiveText === "string" && this.isLikelyUserText(interactiveText)) {
+      return this.normalizeRecoveredText(interactiveText);
+    }
+
+    const interactiveParamsJson = m.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson;
+    if (typeof interactiveParamsJson === "string") {
+      try {
+        const parsed = JSON.parse(interactiveParamsJson);
+        const parsedCandidate = this.extractFallbackTextFromObject(parsed);
+        if (parsedCandidate) return this.normalizeRecoveredText(parsedCandidate);
+      } catch {
+        // ignora JSON inválido e segue fallback geral
+      }
+    }
+
+    const fallbackText = this.extractFallbackTextFromObject(m);
+    if (fallbackText) return this.normalizeRecoveredText(fallbackText);
+
+    // Alguns payloads trazem texto em camadas fora de "message" (event wrappers / contextInfo).
+    const envelopeFallback = this.extractFallbackTextFromObject(msg);
+    if (envelopeFallback) return this.normalizeRecoveredText(envelopeFallback);
 
     return null;
   }
@@ -502,6 +732,11 @@ class WhatsappQrPairingService {
             undefined;
 
           logger.info(`[WPP QR] Mensagem recebida em conta ${accountId} de ${phone}: ${text.slice(0, 80)}`);
+          if (this.shouldSkipRecentDuplicate(phone, text)) {
+            logger.info(`[WPP QR] Duplicata recente ignorada de ${phone}: ${text.slice(0, 80)}`);
+            continue;
+          }
+
           await processText(phone, senderName, text);
         }
       } catch (err) {
@@ -798,7 +1033,8 @@ class WhatsappQrPairingService {
         }
       }
 
-      await connected.sock.sendMessage(jid, { text });
+      const textoUtf8 = prepareWhatsAppText(text);
+      await connected.sock.sendMessage(jid, { text: textoUtf8 });
 
       if (QR_TYPING_ENABLED) {
         try {
