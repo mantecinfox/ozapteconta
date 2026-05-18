@@ -2,6 +2,7 @@ import { CronJob } from "cron";
 import { prisma } from "../config/prisma";
 import infinityPayService from "./infinityPayService";
 import { sendMessage } from "./whatsappService";
+import { sendEmail } from "./emailService";
 import { logger } from "../utils/logger";
 
 /**
@@ -11,6 +12,12 @@ import { logger } from "../utils/logger";
 
 class RecurringBillingService {
   private cronJob: CronJob | null = null;
+
+  private addDays(date: Date, days: number): Date {
+    const next = new Date(date);
+    next.setDate(next.getDate() + days);
+    return next;
+  }
 
   /**
    * Iniciar cron job de cobrança recorrente
@@ -161,7 +168,7 @@ class RecurringBillingService {
         await prisma.clientSubscription.update({
           where: { id: subscriptionId },
           data: {
-            nextBillingDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+            nextBillingDate: this.addDays(new Date(), 3),
           },
         });
 
@@ -273,6 +280,29 @@ class RecurringBillingService {
       `Após a confirmação, seu acesso permanece liberado automaticamente.`;
 
     await sendMessage(subscription.client.phone, message);
+
+    if (subscription.client.email) {
+      await sendEmail({
+        to: subscription.client.email,
+        subject: `Renovação em 3 dias - ${plan.displayName}`,
+        text:
+          `Olá, ${subscription.client.fullName}!\n\n` +
+          `Sua assinatura vence em 3 dias.\n` +
+          `Plano: ${plan.displayName}\n` +
+          `Valor: R$ ${amount}\n` +
+          `Vencimento: ${nextBilling}\n\n` +
+          (checkoutUrl ? `Pague aqui para renovar por mais 30 dias: ${checkoutUrl}\n\n` : "") +
+          `Após a confirmação, seu acesso permanece liberado automaticamente.`,
+        html:
+          `<p>Olá, ${subscription.client.fullName}!</p>` +
+          `<p>Sua assinatura vence em 3 dias.</p>` +
+          `<p><strong>Plano:</strong> ${plan.displayName}<br/>` +
+          `<strong>Valor:</strong> R$ ${amount}<br/>` +
+          `<strong>Vencimento:</strong> ${nextBilling}</p>` +
+          (checkoutUrl ? `<p><a href="${checkoutUrl}">Pague aqui para renovar por mais 30 dias</a></p>` : "") +
+          `<p>Após a confirmação, seu acesso permanece liberado automaticamente.</p>`,
+      });
+    }
 
     await prisma.paymentGatewayLog.create({
       data: {

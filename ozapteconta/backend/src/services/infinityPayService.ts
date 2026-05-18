@@ -477,7 +477,7 @@ export class InfinityPayService {
           data: {
             status: "ACTIVE",
             lastBillingDate: chargedAt,
-            nextBillingDate: this.calculateNextBillingDate(subscription.billingCycleDayOfMonth),
+            nextBillingDate: this.addDays(chargedAt, 30),
           },
         });
 
@@ -579,11 +579,10 @@ export class InfinityPayService {
     }
   }
 
-  private calculateNextBillingDate(dayOfMonth: number): Date {
-    const date = new Date();
-    date.setMonth(date.getMonth() + 1);
-    date.setDate(dayOfMonth);
-    return date;
+  private addDays(date: Date, days: number): Date {
+    const next = new Date(date);
+    next.setDate(next.getDate() + days);
+    return next;
   }
 
   private mapPaymentMethod(method?: string):

@@ -14,6 +14,37 @@ export function isEmailConfigured(): boolean {
   );
 }
 
+async function sendMail(params: {
+  to: string;
+  subject: string;
+  text: string;
+  html?: string;
+  attachments?: Array<{
+    filename: string;
+    content: Buffer;
+    contentType?: string;
+  }>;
+}): Promise<boolean> {
+  const mailer = getTransporter();
+  if (!mailer) return false;
+
+  try {
+    await mailer.sendMail({
+      from: config.email.from,
+      to: params.to,
+      subject: params.subject,
+      text: params.text,
+      html: params.html,
+      attachments: params.attachments,
+    });
+    logger.info(`[Email] E-mail enviado para ${params.to}`);
+    return true;
+  } catch (error) {
+    logger.error(`[Email] Falha ao enviar e-mail para ${params.to}:`, error);
+    return false;
+  }
+}
+
 function getTransporter(): nodemailer.Transporter | null {
   if (!isEmailConfigured()) return null;
   if (transporter) return transporter;
@@ -42,28 +73,26 @@ export async function sendEmailWithAttachment(params: {
   content: Buffer;
   contentType?: string;
 }): Promise<boolean> {
-  const mailer = getTransporter();
-  if (!mailer) return false;
+  return sendMail({
+    to: params.to,
+    subject: params.subject,
+    text: params.text,
+    html: params.html,
+    attachments: [
+      {
+        filename: params.fileName,
+        content: params.content,
+        contentType: params.contentType || "application/pdf",
+      },
+    ],
+  });
+}
 
-  try {
-    await mailer.sendMail({
-      from: config.email.from,
-      to: params.to,
-      subject: params.subject,
-      text: params.text,
-      html: params.html,
-      attachments: [
-        {
-          filename: params.fileName,
-          content: params.content,
-          contentType: params.contentType || "application/pdf",
-        },
-      ],
-    });
-    logger.info(`[Email] Relatório enviado para ${params.to}`);
-    return true;
-  } catch (error) {
-    logger.error(`[Email] Falha ao enviar relatório para ${params.to}:`, error);
-    return false;
-  }
+export async function sendEmail(params: {
+  to: string;
+  subject: string;
+  text: string;
+  html?: string;
+}): Promise<boolean> {
+  return sendMail(params);
 }

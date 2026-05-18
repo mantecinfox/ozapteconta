@@ -9,6 +9,7 @@ import infinityPayService from "../services/infinityPayService";
 import { authMiddleware, requireClient } from "../middleware/auth";
 import { issueClientPortalAccess } from "../services/clientAccessService";
 import { sendMessage } from "../services/whatsappService";
+import { sendEmail } from "../services/emailService";
 
 const router = Router();
 
@@ -34,6 +35,12 @@ async function getPortalBaseUrl() {
 async function buildPortalLink(token: string) {
   const base = await getPortalBaseUrl();
   return `${base}/cliente/qr/${token}`;
+}
+
+function addDays(date: Date, days: number): Date {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
 }
 
 function parseDateInput(v?: string): Date | null {
@@ -421,7 +428,7 @@ router.post("/register", async (req: Request, res: Response) => {
         plan,
         priceMonthly: planData.priceMonthly,
         status: "PENDING",
-        nextBillingDate: new Date(),
+        nextBillingDate: addDays(new Date(), 30),
       },
     });
 
@@ -517,6 +524,15 @@ router.post("/register", async (req: Request, res: Response) => {
       paymentLinkMessageSent = await sendMessage(phone, paymentMsg);
       if (!paymentLinkMessageSent) {
         logger.warn(`[ClientPortal] Não foi possível enviar mensagem dedicada com link de pagamento para ${phone}`);
+      }
+
+      if (created.email) {
+        await sendEmail({
+          to: created.email,
+          subject: `Link de pagamento - ${planData.displayName}`,
+          text: `Olá, ${fullName}!\n\nSeu link de pagamento para ativação do ozapteconta está pronto:\n${paymentLinkUrl}\n\nApós a confirmação do pagamento, sua conta será ativada automaticamente.`,
+          html: `<p>Olá, ${fullName}!</p><p>Seu link de pagamento para ativação do ozapteconta está pronto:</p><p><a href="${paymentLinkUrl}">${paymentLinkUrl}</a></p><p>Após a confirmação do pagamento, sua conta será ativada automaticamente.</p>`,
+        });
       }
     }
 
