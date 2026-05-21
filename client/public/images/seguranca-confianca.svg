@@ -1,6 +1,6 @@
 <svg viewBox="0 0 640 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">Segurança e proteção de dados OZAPTECHAMA</title>
-  <desc id="desc">Ilustração de escudo, cadeado e conversas protegidas no WhatsApp</desc>
+  <title id="title">SeguranÃ§a e proteÃ§Ã£o de dados OZAPTECONTA</title>
+  <desc id="desc">IlustraÃ§Ã£o de escudo, cadeado e conversas protegidas no WhatsApp</desc>
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#1e3a8a"/>
@@ -17,7 +17,7 @@
 
   <rect width="640" height="520" rx="24" fill="url(#bg)"/>
 
-  <!-- Círculos decorativos -->
+  <!-- CÃ­rculos decorativos -->
   <circle cx="90" cy="90" r="56" fill="#22c55e" opacity="0.12"/>
   <circle cx="560" cy="420" r="72" fill="#22c55e" opacity="0.1"/>
   <circle cx="520" cy="80" r="36" fill="#fff" opacity="0.06"/>
@@ -31,7 +31,7 @@
     <rect x="28" y="168" width="120" height="32" rx="10" fill="#fff" opacity="0.92"/>
     <rect x="48" y="216" width="88" height="32" rx="10" fill="#22c55e" opacity="0.85"/>
     <circle cx="100" cy="28" r="6" fill="#22c55e"/>
-    <text x="100" y="32" text-anchor="middle" fill="#0f172a" font-family="system-ui,sans-serif" font-size="8" font-weight="700">Ï</text>
+    <text x="100" y="32" text-anchor="middle" fill="#0f172a" font-family="system-ui,sans-serif" font-size="8" font-weight="700">â€¢</text>
   </g>
 
   <!-- Escudo central -->
@@ -48,8 +48,8 @@
     <rect x="54" y="80" width="12" height="20" rx="4" fill="#92400e"/>
   </g>
 
-  <!-- Ícones dados -->
+  <!-- Ãcones dados -->
   <g fill="#fff" opacity="0.9" font-family="system-ui,sans-serif" font-size="13" font-weight="600">
-    <text x="320" y="468" text-anchor="middle" fill="#bbf7d0">Criptografia " Privacidade " Controle total</text>
+    <text x="320" y="468" text-anchor="middle" fill="#bbf7d0">Criptografia â€¢ Privacidade â€¢ Controle total</text>
   </g>
 </svg>

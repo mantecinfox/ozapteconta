@@ -3,7 +3,7 @@ import { ArrowRight, CheckCircle2, TrendingUp } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
 /**
- * Design Philosophy: OZAPTECHAMA - Gatilhos Mentais Poderosos
+ * Design Philosophy: OZAPTECONTA - Gatilhos Mentais Poderosos
  * - Paleta: Azul Escuro (#0F172A), Branco, Cinza (#6B7280), Preto
  * - Foco em: Urgência, Escassez, Prova Social, FOMO, Transformação
  * - Elementos: Contadores, Números grandes, Badges, Depoimentos reais
@@ -21,7 +21,7 @@ export default function Home() {
   const [totalSavings, setTotalSavings] = useState(86000);
   const [spotsLeft, setSpotsLeft] = useState(42);
   const whatsappNumber = '553173124224';
-  const whatsappMessage = 'Olá! Quero começar a usar o OZAPTECHAMA pelo WhatsApp.';
+  const whatsappMessage = 'Olá! Quero começar a usar o OZAPTECONTA pelo WhatsApp.';
   const whatsappLink = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(whatsappMessage)}`;
   const whatsappQrCode = `https://api.qrserver.com/v1/create-qr-code/?size=320x320&data=${encodeURIComponent(whatsappLink)}`;
 
@@ -37,13 +37,13 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-white text-black">
-      {/* Header: ícone + texto num único bloco (não usar logo-ozaptechama.svg — corta o nome) */}
+      {/* Header: ícone + texto num único bloco (não usar logo-ozapteconta.svg — corta o nome) */}
       <header className="sticky top-0 z-50 border-b-4 border-green-500 bg-white shadow-md">
         <div className="container mx-auto flex h-16 items-center justify-center gap-4 px-4 md:justify-between">
           <a
             href="/"
             className="flex max-w-full items-center gap-3"
-            aria-label="OZAPTECHAMA - início"
+            aria-label="OZAPTECONTA - início"
           >
             <img
               src="/logo-icon.svg?v=4"
@@ -55,7 +55,7 @@ export default function Home() {
             />
             <div className="min-w-0 leading-tight">
               <p className="text-base font-extrabold tracking-tight text-gray-900 sm:text-lg">
-                OZAPTECHAMA
+                OZAPTECONTA
               </p>
               <p className="text-xs font-medium text-green-600">
                 {TAGLINE_SHORT}
@@ -84,7 +84,7 @@ export default function Home() {
                   PLANOS ACESSÍVEIS • PIX OU CARTÃO • 100% BRASILEIRO
                 </div>
                 <h1 className="text-5xl md:text-6xl font-bold leading-tight">
-                  OZAPTECHAMA
+                  OZAPTECONTA
                 </h1>
                 <p className="text-xl text-green-300 font-bold sm:text-2xl">
                   {TAGLINE}
@@ -130,7 +130,7 @@ export default function Home() {
                 </div>
                 <img
                   src="https://d2xsxph8kpxj0f.cloudfront.net/310419663028484296/azDT7U6LLduZEjhZgggaQx/hero-zap-te-conta-PrnpHjUY8RJnzx3WugEQsz.webp"
-                  alt="OZAPTECHAMA no WhatsApp"
+                  alt="OZAPTECONTA no WhatsApp"
                   className="h-auto w-full rounded-2xl object-contain"
                 />
                 <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs font-bold">
@@ -155,7 +155,7 @@ export default function Home() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-12 text-center">
             <div className="bg-white/10 backdrop-blur text-white p-5 rounded-2xl border border-white/20">
               <p className="text-3xl">{activeUsers.toLocaleString()}</p>
-              <p className="text-sm text-green-200">Usuários OZAPTECHAMA</p>
+              <p className="text-sm text-green-200">Usuários OZAPTECONTA</p>
             </div>
             <div className="bg-white/10 backdrop-blur text-white p-5 rounded-2xl border border-white/20">
               <p className="text-3xl">R$ {totalSavings.toLocaleString('pt-BR')}</p>
@@ -203,7 +203,7 @@ export default function Home() {
             <div className="mx-auto w-full max-w-sm rounded-[2rem] bg-white p-5 text-center text-black shadow-2xl">
               <img
                 src={whatsappQrCode}
-                alt="QR Code para iniciar conversa no WhatsApp do OZAPTECHAMA"
+                alt="QR Code para iniciar conversa no WhatsApp do OZAPTECONTA"
                 className="mx-auto w-full max-w-[280px] rounded-2xl border-4 border-green-500 bg-white p-3"
               />
               <p className="mt-4 text-lg font-bold text-blue-900">Escaneie para falar agora</p>
@@ -234,7 +234,7 @@ export default function Home() {
                 Sem assistente
               </div>
               <div className="mb-5 text-5xl">😰</div>
-              <h3 className="text-2xl font-bold text-red-900">ANTES — Sem OZAPTECHAMA</h3>
+              <h3 className="text-2xl font-bold text-red-900">ANTES — Sem OZAPTECONTA</h3>
               <p className="mb-6 mt-2 text-red-800/90">
                 Você resolve tudo sozinho, em vários apps, sem resposta na hora.
               </p>
@@ -264,10 +264,10 @@ export default function Home() {
 
             <div className="relative overflow-hidden rounded-2xl border-2 border-green-500 bg-green-50 p-8 shadow-xl ring-4 ring-green-500/20">
               <div className="absolute right-0 top-0 rounded-bl-2xl bg-green-500 px-4 py-1 text-xs font-bold uppercase tracking-wide text-black">
-                Com OZAPTECHAMA
+                Com OZAPTECONTA
               </div>
               <div className="mb-5 text-5xl">🎉</div>
-              <h3 className="text-2xl font-bold text-green-900">DEPOIS — Com OZAPTECHAMA</h3>
+              <h3 className="text-2xl font-bold text-green-900">DEPOIS — Com OZAPTECONTA</h3>
               <p className="mb-6 mt-2 text-green-800">
                 Um assistente inteligente no WhatsApp, pronto quando você precisar.
               </p>
@@ -373,7 +373,7 @@ export default function Home() {
       <section className="bg-blue-900 text-white py-16 md:py-24">
         <div className="container mx-auto px-4">
           <h2 className="text-4xl md:text-5xl font-bold text-center mb-12">
-            O que você ganha com OZAPTECHAMA
+            O que você ganha com OZAPTECONTA
           </h2>
 
           <div className="grid md:grid-cols-2 gap-8">
@@ -552,7 +552,7 @@ export default function Home() {
               <div className="absolute -inset-2 rounded-2xl bg-gradient-to-br from-green-400/30 to-blue-600/20 blur-xl" aria-hidden />
               <img
                 src="/images/seguranca-confianca.svg"
-                alt="Proteção de dados no WhatsApp: escudo, criptografia e privacidade no OZAPTECHAMA"
+                alt="Proteção de dados no WhatsApp: escudo, criptografia e privacidade no OZAPTECONTA"
                 width={640}
                 height={520}
                 className="relative w-full rounded-2xl border-2 border-green-500/40 shadow-xl"
@@ -696,7 +696,7 @@ export default function Home() {
           <div className="mt-12 grid gap-6 text-center md:grid-cols-3">
             <div className="px-2">
               <p className="text-4xl font-bold text-green-500">{activeUsers.toLocaleString()}</p>
-              <p className="text-pretty text-sm leading-snug">Usuários OZAPTECHAMA ativos</p>
+              <p className="text-pretty text-sm leading-snug">Usuários OZAPTECONTA ativos</p>
             </div>
             <div className="px-2">
               <p className="text-4xl font-bold text-green-500">R$ {totalSavings.toLocaleString('pt-BR')}</p>
@@ -716,8 +716,8 @@ export default function Home() {
           <div className="grid md:grid-cols-4 gap-8 mb-8">
             <div>
               <div className="flex items-center gap-3 mb-3">
-                <img src="/logo-icon-light.svg" alt="OZAPTECHAMA" className="h-14 w-14 flex-shrink-0" />
-                <p className="font-extrabold text-xl text-white leading-tight">OZAPTECHAMA</p>
+                <img src="/logo-icon-light.svg" alt="OZAPTECONTA" className="h-14 w-14 flex-shrink-0" />
+                <p className="font-extrabold text-xl text-white leading-tight">OZAPTECONTA</p>
               </div>
               <p className="text-sm text-gray-300">{TAGLINE_FOOTER}</p>
             </div>
@@ -747,7 +747,7 @@ export default function Home() {
             </div>
           </div>
           <div className="border-t border-blue-800 pt-8 text-center text-sm text-gray-300">
-            <p>&copy; 2024 OZAPTECHAMA. Todos os direitos reservados. | www.ozaptechama.com.br</p>
+            <p>&copy; 2024 OZAPTECONTA. Todos os direitos reservados. | www.ozapteconta.com.br</p>
           </div>
         </div>
       </footer>
