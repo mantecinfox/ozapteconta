@@ -3,7 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, Settings, Users,
   LogOut, Menu, X, BotMessageSquare, MessageSquare, ChevronRight,
-  Sun, Moon, Monitor, ScrollText, BarChart3,
+  Sun, Moon, Monitor, ScrollText, BarChart3, ShoppingCart,
 } from "lucide-react";
 import { cn } from "@/components/ui";
 import { useAuth } from "@/contexts/AuthContext";
@@ -11,11 +11,11 @@ import { useTheme, type Theme } from "@/contexts/ThemeContext";
 
 const navItems = [
   { path: "/", icon: LayoutDashboard, label: "Dashboard" },
-  { path: "/users", icon: Users, label: "Usuários" },
   { path: "/clients", icon: Users, label: "Clientes" },
   { path: "/admin-logs", icon: ScrollText, label: "Logs" },
   { path: "/ai-usage", icon: BarChart3, label: "Uso de IA" },
   { path: "/whatsapp-accounts", icon: MessageSquare, label: "Contas WPP" },
+  { path: "/price-sources", icon: ShoppingCart, label: "Comparador Preços" },
   { path: "/bot-training", icon: BotMessageSquare, label: "Treinamento Bot" },
   { path: "/settings", icon: Settings, label: "Configurações" },
 ];

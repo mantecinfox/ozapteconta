@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   MessageSquare, Bot, CheckCircle2, XCircle,
   Eye, EyeOff, Save, TestTube2, Bell, Play, CreditCard, PowerOff, Plus, X, Mic,
+  ChevronUp, ChevronDown, GripVertical,
 } from "lucide-react";
 import api, { AiProvider, AudioModelChainSettings } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle, Badge, Button, Input } from "@/components/ui";
@@ -30,6 +31,157 @@ const PROVIDER_INFO: Record<string, { color: string; desc: string; models: strin
   OLLAMA:  { color: "bg-yellow-500/10 text-yellow-400", desc: "Ollama — Modelos locais (sem custo)", models: ["hermes3:8b", "qwen2.5:7b", "mistral:7b", "llama3"],                 supportsAudio: true  },
   ABACUS:  { color: "bg-cyan-500/10 text-cyan-400",     desc: "Abacus AI — RouteLLM",               models: ["gpt-4o-mini", "gpt-4o", "claude-3-5-sonnet"],                      supportsAudio: true  },
 };
+
+function AiProviderPriorityList({
+  providers,
+  channel,
+  onChanged,
+}: {
+  providers: AiProvider[];
+  channel: "text" | "audio";
+  onChanged: (message: string) => void;
+}) {
+  const qc = useQueryClient();
+  const priorityField = channel === "text" ? "textPriority" : "audioPriority";
+  const capable = channel === "text"
+    ? new Set(["OLLAMA", "ABACUS", "GEMINI", "GROQ", "OPENAI", "GROK"])
+    : new Set(["ABACUS", "GEMINI", "GROQ", "OPENAI", "OLLAMA"]);
+
+  const inChain = providers
+    .filter((provider) => capable.has(provider.provider) && provider[priorityField] > 0)
+    .sort((a, b) => a[priorityField] - b[priorityField]);
+
+  const outOfChain = providers
+    .filter((provider) => capable.has(provider.provider) && provider[priorityField] <= 0)
+    .sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+  const moveMutation = useMutation({
+    mutationFn: ({ provider, direction }: { provider: string; direction: "up" | "down" }) =>
+      api.post(`/settings/ai-providers/${provider}/move`, { channel, direction }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["ai-providers"] });
+    },
+  });
+
+  const toggleMutation = useMutation({
+    mutationFn: ({ provider, enable }: { provider: string; enable: boolean }) => {
+      if (enable) {
+        const order = [...inChain.map((item) => item.provider), provider];
+        return api.put("/settings/ai-providers/reorder", { channel, order });
+      }
+      const order = inChain.filter((item) => item.provider !== provider).map((item) => item.provider);
+      if (order.length === 0) {
+        return api.put(`/settings/ai-providers/${provider}`, {
+          enabled: false,
+          ...(channel === "text" ? { isDefault: false } : { isAudioDefault: false }),
+        });
+      }
+      return api.put("/settings/ai-providers/reorder", { channel, order });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["ai-providers"] });
+      onChanged(channel === "text" ? "Prioridade de texto atualizada" : "Prioridade de áudio atualizada");
+    },
+  });
+
+  return (
+    <Card className="mb-4 border border-border/50">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          {channel === "text" ? <MessageSquare className="w-4 h-4 text-primary" /> : <Mic className="w-4 h-4 text-green-400" />}
+          {channel === "text" ? "Prioridade de Texto (fallback automático)" : "Prioridade de Áudio (fallback automático)"}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          Provedores habilitados são chamados em ordem (1 = primeiro). Se um falhar por erro de API, timeout ou limite de tokens, o próximo da lista é tentado automaticamente.
+        </p>
+
+        {inChain.length === 0 ? (
+          <p className="text-sm text-muted-foreground italic">Nenhum provedor na cadeia. Ative um abaixo.</p>
+        ) : (
+          <div className="space-y-2">
+            {inChain.map((provider, index) => {
+              const info = PROVIDER_INFO[provider.provider];
+              return (
+                <div
+                  key={`${channel}-${provider.provider}`}
+                  className="flex items-center gap-3 rounded-lg border border-border/60 bg-secondary/20 px-3 py-2.5"
+                >
+                  <GripVertical className="w-4 h-4 text-muted-foreground shrink-0" />
+                  <div className="w-7 h-7 rounded-full bg-primary/15 text-primary text-xs font-bold flex items-center justify-center shrink-0">
+                    {provider[priorityField]}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-sm text-foreground">{provider.displayName}</span>
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${info?.color || "bg-muted text-muted-foreground"}`}>
+                        {provider.provider}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground truncate">{provider.model || info?.models[0] || "sem modelo"}</p>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 w-8 p-0"
+                      disabled={index === 0 || moveMutation.isPending}
+                      onClick={() => moveMutation.mutate({ provider: provider.provider, direction: "up" })}
+                    >
+                      <ChevronUp className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 w-8 p-0"
+                      disabled={index === inChain.length - 1 || moveMutation.isPending}
+                      onClick={() => moveMutation.mutate({ provider: provider.provider, direction: "down" })}
+                    >
+                      <ChevronDown className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 text-xs border-destructive/40 text-destructive"
+                      loading={toggleMutation.isPending}
+                      onClick={() => toggleMutation.mutate({ provider: provider.provider, enable: false })}
+                    >
+                      Remover
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {outOfChain.length > 0 && (
+          <div className="pt-2 border-t border-border/40 space-y-2">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Disponíveis para adicionar</p>
+            {outOfChain.map((provider) => (
+              <div key={`${channel}-out-${provider.provider}`} className="flex items-center justify-between gap-3 rounded-lg border border-dashed border-border/50 px-3 py-2">
+                <div>
+                  <span className="text-sm text-foreground">{provider.displayName}</span>
+                  <span className="text-xs text-muted-foreground ml-2">{provider.provider}</span>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs"
+                  loading={toggleMutation.isPending}
+                  onClick={() => toggleMutation.mutate({ provider: provider.provider, enable: true })}
+                >
+                  + Adicionar à cadeia
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 function ProviderCard({
   provider,
@@ -478,6 +630,19 @@ export default function Settings() {
     },
   });
 
+  const runBilling = useMutation({
+    mutationFn: () => api.post("/settings/billing/run"),
+    onSuccess: (r) => {
+      const d = r.data as { processed: number; linksSent: number; errors: number };
+      setToast(`Cobrança: ${d.processed} verificadas, ${d.linksSent} link(s) enviado(s)`);
+      setTimeout(() => setToast(""), 4000);
+    },
+    onError: () => {
+      setToast("Falha ao executar cobrança recorrente");
+      setTimeout(() => setToast(""), 4000);
+    },
+  });
+
   const saveAudioChain = useMutation({
     mutationFn: () => api.put("/settings/audio-model-chain", { models: audioChainForm }),
     onSuccess: () => {
@@ -652,12 +817,32 @@ export default function Settings() {
         </CardContent>
       </Card>
 
+      {/* Cobrança recorrente */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <CreditCard className="w-5 h-5 text-primary" />
+            <CardTitle>Cobrança Recorrente (InfinitePay)</CardTitle>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            O cron roda às <strong className="text-foreground">02:00</strong> e <strong className="text-foreground">09:00 (Brasília)</strong>.
+            Verifica assinaturas vencendo ou vencidas, gera link InfinitePay e envia ao cliente via WhatsApp.
+          </p>
+          <Button variant="outline" loading={runBilling.isPending} onClick={() => runBilling.mutate()}>
+            <Play className="w-4 h-4" />
+            Executar Cobrança Agora
+          </Button>
+        </CardContent>
+      </Card>
+
       {/* AI Providers */}
       <div>
         <div className="flex items-center justify-between gap-2 mb-4">
           <div className="flex items-center gap-2">
             <Bot className="w-5 h-5 text-primary" />
-            <h2 className="text-lg font-semibold text-foreground">Provedores de IA</h2>
+            <h2 className="text-lg font-semibold text-foreground">APIs e configurações de IA</h2>
           </div>
           <Button size="sm" variant="outline" onClick={() => { setAddProviderKey(availableToAdd[0] || ""); setShowAddProvider(true); }}>
             <Plus className="w-3.5 h-3.5" />
@@ -719,33 +904,28 @@ export default function Settings() {
           </div>
         )}
 
+        <AiProviderPriorityList
+          providers={providers}
+          channel="text"
+          onChanged={(message) => { setToast(message); setTimeout(() => setToast(""), 3000); }}
+        />
+
+        <AiProviderPriorityList
+          providers={providers}
+          channel="audio"
+          onChanged={(message) => { setToast(message); setTimeout(() => setToast(""), 3000); }}
+        />
+
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {(() => {
-            // Compute text ordering: isDefault=1st, then enabled fallbacks by id
-            const textOrdered = [...providers]
-              .filter((p) => p.isDefault || p.enabled)
-              .sort((a, b) => {
-                if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
-                return a.id - b.id;
-              });
-            const textOrderMap: Record<string, number> = {};
-            textOrdered.forEach((p, i) => { textOrderMap[p.provider] = i + 1; });
-
-            // Compute audio ordering: isAudioDefault providers by id
-            const audioOrdered = [...providers].filter((p) => p.isAudioDefault).sort((a, b) => a.id - b.id);
-            const audioOrderMap: Record<string, number> = {};
-            audioOrdered.forEach((p, i) => { audioOrderMap[p.provider] = i + 1; });
-
-            return providers.map((p) => (
-              <ProviderCard
-                key={p.provider}
-                provider={p}
-                textOrder={textOrderMap[p.provider]}
-                audioOrder={audioOrderMap[p.provider]}
-                onSave={() => { setToast(`${p.displayName} atualizado!`); setTimeout(() => setToast(""), 3000); }}
-              />
-            ));
-          })()}
+          {providers.map((p) => (
+            <ProviderCard
+              key={p.provider}
+              provider={p}
+              textOrder={p.textPriority > 0 ? p.textPriority : undefined}
+              audioOrder={p.audioPriority > 0 ? p.audioPriority : undefined}
+              onSave={() => { setToast(`${p.displayName} atualizado!`); setTimeout(() => setToast(""), 3000); }}
+            />
+          ))}
         </div>
 
         <Card className="mt-4 border border-border/50">

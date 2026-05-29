@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 192" width="256" height="192">
+  <rect width="256" height="192" fill="#ffffff"/>
+  <g fill="none" stroke="#000000" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round">
+    <!-- Corpo do hatch -->
+    <path d="M22 138 L22 124 Q22 116 30 114 L70 108 Q82 96 96 92 L150 86 Q172 86 192 102 L226 110 Q234 114 234 124 L234 138"/>
+    <!-- Janela frontal e traseira (cabine) -->
+    <path d="M78 108 L96 92"/>
+    <path d="M180 92 L196 104"/>
+    <path d="M96 92 L180 92"/>
+    <!-- Pilar central -->
+    <path d="M138 92 L138 108"/>
+    <!-- Chão -->
+    <path d="M14 138 L242 138"/>
+    <!-- Rodas -->
+    <circle cx="68" cy="138" r="14"/>
+    <circle cx="68" cy="138" r="5"/>
+    <circle cx="192" cy="138" r="14"/>
+    <circle cx="192" cy="138" r="5"/>
+    <!-- Para-choque traseiro -->
+    <path d="M22 130 L40 130"/>
+    <!-- Maçaneta -->
+    <path d="M118 116 L132 116"/>
+  </g>
+</svg>

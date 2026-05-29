@@ -3,6 +3,18 @@ import path from "path";
 import { prisma } from "../config/prisma";
 import { logger } from "../utils/logger";
 import { writeAiUsageLog } from "./aiUsageMetricsService";
+import {
+  extractFoodHints,
+  isComplexMealList,
+  looksLikeNutritionMealList,
+} from "./nutritionRouting";
+import type { AiIntent } from "./aiLearningService";
+import {
+  buildZeroDriftNutritionPrompt,
+  buildZeroDriftInvestmentPrompt,
+  buildZeroDriftSystemPrompt,
+  resolveResponseSkin,
+} from "./zeroDriftResponderService";
 
 export interface AIMessage {
   role: "system" | "user" | "assistant";
@@ -25,83 +37,22 @@ export interface ExtractedTransaction {
 }
 
 function buildNutritionPrompt(): string {
-  return `Você é um especialista em nutrição e saúde via WhatsApp, respondendo em português brasileiro de forma direta, educativa e motivadora.
+  return `${buildZeroDriftNutritionPrompt()}
 
-MISSÃO PRINCIPAL:
-Educar o usuário a comer melhor, em quantidades adequadas, priorizando proteína sobre carboidrato, e sempre orientando para uma alimentação que gere resultado real — seja emagrecer, manter ou ganhar massa.
+REFERÊNCIAS RÁPIDAS DE PROTEÍNA:
+- Frango grelhado 31g/100g · Patinho 27g/100g · Atum/Salmão 22-25g/100g
+- Ovo 13g/100g (~6g/und) · Whey 22-25g/dose · Cottage 12g/100g
 
-OBJETIVOS:
-- Identificar alimentos, refeições e bebidas citados
-- Estimar calorias, macronutrientes (proteína, carbo, gordura, fibra) por porção
-- Avaliar se a refeição contribui para o objetivo do usuário (déficit, manutenção ou superávit)
-- Apontar substituições mais inteligentes sempre que houver um alimento ruim
-- Incentivar sempre o aumento de proteína e redução de carboidratos refinados e ultraprocessados
-- Orientar quantidades menores quando o objetivo for emagrecer (déficit calórico)
-- Se o usuário pedir para "mostrar" algo relacionado a alimentos ou dieta, forneça um link de imagem ilustrativa ou descreva visualmente com emojis detalhados
+CONSUMO DIÁRIO DE PROTEÍNA POR TREINO:
+- Musculação 1,8–2,2g/kg · CrossFit 1,8–2,4g/kg · Sedentário 1,2–1,5g/kg
 
-REGRAS OBRIGATÓRIAS:
-- Responda sempre em texto simples formatado para WhatsApp (use *negrito*, _itálico_, listas com •)
-- Nunca use JSON na resposta
-- Se faltar quantidade, use porção padrão e informe isso
-- Nunca afirme valores calóricos como exatos — sempre use faixas (ex: 280–320 kcal)
-- Não prescreva dieta clínica nem diagnóstico médico
-- Seja assertivo, direto e motivador — não seja vago ou evasivo
-- Sempre termine com uma dica prática acionável
-
-PRINCÍPIOS NUTRICIONAIS QUE VOCÊ SEMPRE ENSINA:
-1. 🥩 Proteína > Carboidrato: priorize proteínas em toda refeição para saciedade, preservação muscular e termogênese
-2. 🔻 Déficit calórico = emagrecer: para perder peso, consuma menos calorias do que você gasta (TDEE − 400 a 500 kcal)
-3. 💧 Hidratação: 35ml × peso corporal em água/dia
-4. 🌿 Fibras: mínimo 25g/dia para saciedade e saúde intestinal
-5. ⏰ Distribuição: 4 a 5 refeições com proteína distribuída ao longo do dia
-6. 🚫 Evite: açúcar refinado, farinha branca, frituras, ultraprocessados, refrigerantes
-
-FORMATO PADRÃO DE RESPOSTA PARA ALIMENTOS:
-━━━━━━━━━━━━━━━━
-🍽️ *[Nome da refeição/alimento]*
-━━━━━━━━━━━━━━━━
-🔥 *Calorias:* [faixa] kcal
-💪 *Proteína:* ~[X]g
-🍞 *Carbo:* ~[X]g
-🫒 *Gordura:* ~[X]g
-━━━━━━━━━━━━━━━━
-✅ *Avaliação:* [avaliação direta — bom/aceitável/evite]
-⏱️ *Frequência ideal:* [ex: diário / 3x semana / ocasionalmente]
-📏 *Porção recomendada:* [ex: 150g, 1 unidade]
-🔄 *Substituição inteligente:* [alternativa mais saudável se aplicável]
-💡 *Dica:* [dica prática de preparo ou combinação]
-━━━━━━━━━━━━━━━━
-
-QUANDO O USUÁRIO PEDIR "MOSTRAR" OU "VER" IMAGEM:
-- Descreva o alimento/prato visualmente com emojis detalhados
-- Exemplo: 🍗🥦🍚 Frango grelhado + brócolis no vapor + arroz integral — visual de prato equilibrado
-- Forneça emojis que representem cores, texturas e composição do prato
-
-RECOMENDAÇÕES DE PROTEÍNA POR TREINO (use quando contexto indicar treino):
-- 🏋️ Musculação: 1,8–2,2g por kg/dia
-- 🤸 Calistenia: 1,6–2,0g por kg/dia
-- 🏅 CrossFit: 1,8–2,4g por kg/dia
-- 🏃 Cardio/aeróbico: 1,4–1,8g por kg/dia
-- 💤 Sedentário: 1,2–1,5g por kg/dia
-
-MELHORES PROTEÍNAS — HOMENS:
-🥩 Frango grelhado (31g/100g) | 🥚 Ovos (13g/100g) | 🐟 Atum (25g/100g)
-🥩 Patinho/Alcatra (27g/100g) | 🥛 Whey Protein (22–25g/dose) | 🐟 Salmão (22g/100g)
-🧀 Cottage (12g/100g) | 🫘 Lentilha (9g/100g) | 🥜 Pasta de amendoim (25g/100g)
-
-MELHORES PROTEÍNAS — MULHERES:
-🍗 Frango grelhado (31g/100g) | 🥚 Ovo cozido (13g/100g) | 🐟 Tilápia/Merluza (20g/100g)
-🧀 Iogurte grego (10g/100g) | 🧀 Cottage (12g/100g) | 🥛 Whey isolado (25g/dose)
-🫘 Grão-de-bico (9g/100g) | 🥜 Pasta de amendoim (25g/100g) | 🥩 Carne magra (24g/100g)
-
-Se o usuário não informar sexo, use a lista masculina como padrão.
-
-Não diga que você é uma IA. Nunca use linguagem excessivamente técnica. Seja como um personal nutritionist amigável e direto.`;
+EVITE recomendar: açúcar refinado, farinha branca, frituras, ultraprocessados.`;
 }
 
 const DEFAULT_ABACUS_AUDIO_MODELS = [
   "gpt-4o-audio-preview",
   "gpt-4o-mini-audio-preview",
+  "gemini-2.5-flash",
 ];
 
 const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
@@ -455,13 +406,38 @@ function buildAudioExtractionPrompt(
 }
 
 // ─── Chamada para provedores externos ─────────────────────────────────────────
+interface CallProviderOptions {
+  /** Máximo de tokens de saída. Default: 600. */
+  maxTokens?: number;
+}
+
+interface CallProviderResult {
+  content: string;
+  /** Normalizado: "stop" | "length" | "content_filter" | "tool_calls" | "other". */
+  finishReason?: string;
+  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+}
+
+/** Normaliza o campo `finish_reason`/`finishReason`/`done_reason` para um conjunto fixo. */
+function normalizeFinishReason(raw: unknown): string | undefined {
+  if (raw === null || raw === undefined) return undefined;
+  const v = String(raw).toLowerCase();
+  if (v === "stop" || v === "end_turn" || v === "complete") return "stop";
+  if (v === "length" || v === "max_tokens" || v === "model_length") return "length";
+  if (v === "content_filter" || v === "safety") return "content_filter";
+  if (v === "tool_calls" || v === "function_call") return "tool_calls";
+  return v || undefined;
+}
+
 async function callProvider(
   provider: string,
   apiKey: string,
   model: string,
   messages: AIMessage[],
-  apiUrl?: string | null
-): Promise<{ content: string; usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number } }> {
+  apiUrl?: string | null,
+  options?: CallProviderOptions,
+): Promise<CallProviderResult> {
+  const maxTokens = options?.maxTokens ?? 600;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   let url = "";
   let body: Record<string, unknown> = {};
@@ -471,7 +447,7 @@ async function callProvider(
     case "BUILTIN":
       url = "https://api.openai.com/v1/chat/completions";
       headers["Authorization"] = `Bearer ${apiKey}`;
-      body = { model: normalizeModelForProvider(provider, model), messages, temperature: 0.1, max_tokens: 600 };
+      body = { model: normalizeModelForProvider(provider, model), messages, temperature: 0.1, max_tokens: maxTokens };
       break;
 
     case "GEMINI": {
@@ -485,7 +461,7 @@ async function callProvider(
           role: m.role === "assistant" ? "model" : "user",
           parts: [{ text: m.content }],
         })),
-        generationConfig: { temperature: 0.1, maxOutputTokens: 600 },
+        generationConfig: { temperature: 0.1, maxOutputTokens: maxTokens },
       };
       break;
     }
@@ -493,13 +469,13 @@ async function callProvider(
     case "GROQ":
       url = "https://api.groq.com/openai/v1/chat/completions";
       headers["Authorization"] = `Bearer ${apiKey}`;
-      body = { model: normalizeModelForProvider(provider, model), messages, temperature: 0.1, max_tokens: 600 };
+      body = { model: normalizeModelForProvider(provider, model), messages, temperature: 0.1, max_tokens: maxTokens };
       break;
 
     case "GROK":
       url = "https://api.x.ai/v1/chat/completions";
       headers["Authorization"] = `Bearer ${apiKey}`;
-      body = { model: normalizeModelForProvider(provider, model), messages, temperature: 0.1, max_tokens: 600 };
+      body = { model: normalizeModelForProvider(provider, model), messages, temperature: 0.1, max_tokens: maxTokens };
       break;
 
     case "ABACUS": {
@@ -509,7 +485,7 @@ async function callProvider(
         model: normalizeModelForProvider(provider, model),
         messages,
         temperature: 0.1,
-        max_tokens: 600,
+        max_tokens: maxTokens,
         stream: false,
       };
       break;
@@ -520,7 +496,12 @@ async function callProvider(
       const ollamaModel = normalizeModelForProvider(provider, model);
       await ensureOllamaModelAvailable(base, ollamaModel);
       url = `${base}/api/chat`;
-      body = { model: ollamaModel, messages, stream: false, options: { temperature: 0.1 } };
+      body = {
+        model: ollamaModel,
+        messages,
+        stream: false,
+        options: { temperature: 0.1, num_predict: maxTokens },
+      };
       break;
     }
 
@@ -550,44 +531,230 @@ async function callProvider(
       }
     : undefined;
 
-  // Extrai texto conforme o formato de cada provedor
   if (provider === "GEMINI") {
-    const candidates = data.candidates as Array<{ content: { parts: Array<{ text: string }> } }>;
-    return { content: candidates?.[0]?.content?.parts?.[0]?.text || "", usage };
+    const candidates = data.candidates as
+      | Array<{ content?: { parts?: Array<{ text?: string }> }; finishReason?: string }>
+      | undefined;
+    return {
+      content: candidates?.[0]?.content?.parts?.[0]?.text || "",
+      finishReason: normalizeFinishReason(candidates?.[0]?.finishReason),
+      usage,
+    };
   } else if (provider === "OLLAMA") {
-    const msg = data.message as { content: string };
-    return { content: msg?.content || "", usage };
+    const msg = data.message as { content?: string } | undefined;
+    return {
+      content: msg?.content || "",
+      finishReason: normalizeFinishReason(data.done_reason),
+      usage,
+    };
   } else {
-    const choices = data.choices as Array<{ message: { content: string } }>;
-    return { content: choices?.[0]?.message?.content || "", usage };
+    const choices = data.choices as
+      | Array<{ message?: { content?: string }; finish_reason?: string }>
+      | undefined;
+    return {
+      content: choices?.[0]?.message?.content || "",
+      finishReason: normalizeFinishReason(choices?.[0]?.finish_reason),
+      usage,
+    };
   }
 }
 
 // ─── Cadeia de provedores por fonte ─────────────────────────────────────────
 async function getProviderChain(source: "text" | "audio" = "text") {
-  const all = await prisma.aiProviderConfig.findMany({
-    where: { enabled: true },
-    orderBy: { id: "asc" },
+  const { getOrderedProviders } = await import("./aiProviderPriorityService");
+  return getOrderedProviders(source);
+}
+
+type ProviderConfigRow = Awaited<ReturnType<typeof getProviderChain>>[number];
+
+/** Resposta nutricional válida o suficiente para enviar ao usuário. */
+function isAcceptableNutritionResponse(content: string, userText: string, providerName: string): boolean {
+  const trimmed = content.trim();
+  if (!trimmed) return false;
+
+  const lower = trimmed.toLowerCase();
+  if (/nao entendi|não entendi|nao consegui|não consegui|preciso que vo|reformule|formato da mensagem|nao ficou claro|não ficou claro/i.test(lower)) {
+    return false;
+  }
+
+  if (!/kcal|caloria/i.test(trimmed)) return false;
+
+  const complexMeal = isComplexMealList(userText) || looksLikeNutritionMealList(userText);
+  const minLength = providerName === "OLLAMA" ? (complexMeal ? 220 : 120) : complexMeal ? 160 : 80;
+  if (trimmed.length < minLength) return false;
+
+  const userFoods = extractFoodHints(userText);
+  if (userFoods.length >= 2) {
+    const mentioned = userFoods.filter((hint) => {
+      const stem = hint.replace(/s$/, "");
+      return lower.includes(hint) || lower.includes(stem);
+    });
+    const hasTotal = /total|soma|no total|🔥/i.test(trimmed);
+    if (mentioned.length < Math.min(2, userFoods.length) && !hasTotal) return false;
+  }
+
+  if (complexMeal && !/━━|•|\*|total|🔥|calorias?\s*:/i.test(trimmed)) return false;
+
+  if (!isNutritionListComplete(trimmed, userText)) return false;
+
+  return true;
+}
+
+/** Lista de refeição composta deve citar os itens principais ou um total. */
+function isNutritionListComplete(content: string, userText: string): boolean {
+  if (!isComplexMealList(userText) && !looksLikeNutritionMealList(userText)) return true;
+  if (isLikelyTruncatedContent(content)) return false;
+
+  const lower = content.toLowerCase();
+  const hints = extractFoodHints(userText);
+  if (hints.length === 0) return true;
+
+  const mentioned = hints.filter((hint) => {
+    const stem = hint.replace(/s$/, "");
+    return lower.includes(hint) || lower.includes(stem);
   });
 
-  const audioCapableProviders = new Set(["GEMINI", "ABACUS", "GROQ"]);
-  const candidates = source === "audio"
-    ? all.filter((provider) => audioCapableProviders.has(provider.provider))
-    : all;
+  const hasTotal = /total|soma|no total|🔥\s*\*?calorias/i.test(content);
+  if (hasTotal) return true;
 
-  const priority = source === "audio"
-    ? ["GEMINI", "ABACUS", "GROQ"]
-    : ["GROQ", "ABACUS", "GEMINI", "OPENAI", "GROK", "OLLAMA"];
+  const minMentioned = Math.max(2, Math.ceil(hints.length * 0.6));
+  return mentioned.length >= minMentioned;
+}
 
-  return [...candidates].sort((a, b) => {
-    const aDefault = source === "audio" ? a.isAudioDefault : a.isDefault;
-    const bDefault = source === "audio" ? b.isAudioDefault : b.isDefault;
-    if (aDefault !== bDefault) return aDefault ? -1 : 1;
+async function callNutritionProvider(
+  provider: ProviderConfigRow,
+  messages: AIMessage[],
+  attempt: number,
+): Promise<{ content: string | null; truncated: boolean; finishReason?: string; usage?: CallProviderResult["usage"] }> {
+  const startedAt = Date.now();
+  const nutritionMaxTokens = provider.provider === "OLLAMA" ? 2800 : 2200;
 
-    const ai = priority.indexOf(a.provider);
-    const bi = priority.indexOf(b.provider);
-    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-  });
+  try {
+    let combined = "";
+    let lastFinishReason: string | undefined;
+    let lastUsage: CallProviderResult["usage"];
+    let conversation: AIMessage[] = [...messages];
+
+    /* MAX_ITER: 3 — continua resposta cortada no mesmo provedor antes de trocar */
+    for (let part = 0; part < 3; part += 1) {
+      const providerResult = await callProvider(
+        provider.provider,
+        provider.apiKey || "",
+        normalizeModelForProvider(provider.provider, provider.model),
+        conversation,
+        provider.apiUrl,
+        { maxTokens: nutritionMaxTokens },
+      );
+
+      const chunk = providerResult.content.trim();
+      lastFinishReason = providerResult.finishReason;
+      lastUsage = providerResult.usage;
+      combined = combined ? `${combined}\n${chunk}` : chunk;
+
+      const chunkTruncated = isLikelyTruncatedContent(chunk, providerResult.finishReason);
+      const combinedTruncated = isLikelyTruncatedContent(combined, providerResult.finishReason);
+
+      if (!chunkTruncated && !combinedTruncated) break;
+
+      conversation = [
+        ...messages,
+        { role: "assistant", content: combined },
+        {
+          role: "user",
+          content:
+            "Continue exatamente de onde parou, sem repetir. Complete TODOS os alimentos restantes e inclua o TOTAL da refeição em kcal e macros.",
+        },
+      ];
+    }
+
+    const content = combined.trim();
+    const truncated = isLikelyTruncatedContent(content, lastFinishReason);
+
+    await writeAiUsageLog({
+      ts: new Date().toISOString(),
+      provider: provider.provider,
+      model: normalizeModelForProvider(provider.provider, provider.model),
+      channel: "text",
+      stage: "extract",
+      success: Boolean(content) && !truncated,
+      latencyMs: Date.now() - startedAt,
+      fallbackUsed: attempt > 1,
+      attempt,
+      promptTokens: lastUsage?.promptTokens,
+      completionTokens: lastUsage?.completionTokens,
+      totalTokens: lastUsage?.totalTokens,
+      error: truncated ? "finish_reason=length (resposta truncada por max_tokens)" : undefined,
+    });
+
+    return {
+      content: content || null,
+      truncated,
+      finishReason: lastFinishReason,
+      usage: lastUsage,
+    };
+  } catch (err) {
+    await writeAiUsageLog({
+      ts: new Date().toISOString(),
+      provider: provider.provider,
+      model: normalizeModelForProvider(provider.provider, provider.model),
+      channel: "text",
+      stage: "extract",
+      success: false,
+      latencyMs: Date.now() - startedAt,
+      fallbackUsed: attempt > 1,
+      attempt,
+      error: String(err),
+    });
+    throw err;
+  }
+}
+
+async function runNutritionProviderChain(
+  chain: ProviderConfigRow[],
+  messages: AIMessage[],
+  userText: string,
+): Promise<string | null> {
+  let lastError: unknown;
+
+  for (let index = 0; index < chain.length; index += 1) {
+    const provider = chain[index];
+    if (provider.provider !== "OLLAMA" && !provider.apiKey) continue;
+
+    const attempt = index + 1;
+    try {
+      const providerOutcome = await callNutritionProvider(provider, messages, attempt);
+
+      if (providerOutcome.truncated) {
+        lastError = new Error(
+          `Resposta nutricional truncada (${provider.provider}, finishReason=${providerOutcome.finishReason ?? "?"})`,
+        );
+        logger.warn(`[AIService] ${provider.provider} resposta nutricional truncada — tentando próximo provider`);
+        continue;
+      }
+
+      const content = providerOutcome.content;
+      if (!content) continue;
+
+      if (!isAcceptableNutritionResponse(content, userText, provider.provider)) {
+        lastError = new Error(`Resposta nutricional insuficiente de ${provider.provider}`);
+        logger.warn(
+          `[AIService] ${provider.provider} resposta nutricional fraca (${content.length} chars) — fallback para próximo provider`,
+        );
+        continue;
+      }
+
+      if (attempt > 1) {
+        logger.info(`[AIService] Nutrição atendida por fallback ${provider.provider} (tentativa ${attempt})`);
+      }
+      return content;
+    } catch (err) {
+      lastError = err;
+      logger.warn(`[AIService] Análise nutricional com ${provider.provider} falhou — tentando próximo: ${String(err)}`);
+    }
+  }
+
+  logger.warn(`[AIService] Análise nutricional indisponível após cadeia: ${String(lastError)}`);
+  return null;
 }
 
 async function getAbacusAudioModelChain(): Promise<string[]> {
@@ -610,60 +777,18 @@ export async function analyzeNutrition(text: string, history: AIMessage[] = []):
   ];
 
   const chain = await getProviderChain("text");
-  let lastError: unknown;
+  let answer = await runNutritionProviderChain(chain, messages, text);
 
-  for (const provider of chain) {
-    if (provider.provider !== "OLLAMA" && !provider.apiKey) continue;
-
-    const startedAt = Date.now();
-    const attempt = chain.indexOf(provider) + 1;
-
-    try {
-      const providerResult = await callProvider(
-        provider.provider,
-        provider.apiKey || "",
-        normalizeModelForProvider(provider.provider, provider.model),
-        messages,
-        provider.apiUrl,
-      );
-      const content = providerResult.content.trim();
-
-      await writeAiUsageLog({
-        ts: new Date().toISOString(),
-        provider: provider.provider,
-        model: normalizeModelForProvider(provider.provider, provider.model),
-        channel: "text",
-        stage: "extract",
-        success: Boolean(content),
-        latencyMs: Date.now() - startedAt,
-        fallbackUsed: attempt > 1,
-        attempt,
-        promptTokens: providerResult.usage?.promptTokens,
-        completionTokens: providerResult.usage?.completionTokens,
-        totalTokens: providerResult.usage?.totalTokens,
-      });
-
-      if (content) return content;
-    } catch (err) {
-      lastError = err;
-      await writeAiUsageLog({
-        ts: new Date().toISOString(),
-        provider: provider.provider,
-        model: normalizeModelForProvider(provider.provider, provider.model),
-        channel: "text",
-        stage: "extract",
-        success: false,
-        latencyMs: Date.now() - startedAt,
-        fallbackUsed: attempt > 1,
-        attempt,
-        error: String(err),
-      });
-      logger.warn(`[AIService] Análise nutricional com ${provider.provider} falhou — tentando próximo: ${String(err)}`);
+  /* SANITY CHECK: se Ollama/local falhou, força nova passada só em nuvem (Abacus → Gemini → Groq) */
+  if (!answer) {
+    const cloudChain = chain.filter((provider) => provider.provider !== "OLLAMA");
+    if (cloudChain.length > 0) {
+      logger.info("[AIService] Re-tentando nutrição apenas com provedores em nuvem");
+      answer = await runNutritionProviderChain(cloudChain, messages, text);
     }
   }
 
-  logger.warn(`[AIService] Análise nutricional indisponível: ${String(lastError)}`);
-  return null;
+  return answer;
 }
 
 // ─── Plano de dieta personalizado via IA ────────────────────────────────────
@@ -793,41 +918,8 @@ export async function generateDietPlan(text: string, history: AIMessage[] = []):
 
 // ─── Análise de Investimentos via IA ─────────────────────────────────────────
 
-function buildInvestmentPrompt(marketData: string): string {
-  return `Você é um analista de mercado financeiro experiente, respondendo via WhatsApp em português brasileiro.
-
-DADOS DE MERCADO REAIS (gerados agora):
-${marketData}
-
-MISSÃO:
-Com base nos dados acima, gere uma análise de investimento inteligente, envolvente, honesta e útil para o cliente.
-
-ESTRUTURA DA ANÁLISE:
-
-🤖 *ANÁLISE — [Nome do Ativo]*
-━━━━━━━━━━━━━━━━
-[2-3 parágrafos de análise sólida com base nos dados reais fornecidos: contexto do ativo, o que explica a tendência, fatores técnicos relevantes]
-
-📊 *Momento atual:* [positivo / neutro / negativo] — [por quê em 1 frase]
-🎯 *Perfil indicado:* [qual perfil de investidor se adequa: conservador / moderado / arrojado]
-⚡ *Pontos de atenção:* [2-3 riscos ou oportunidades específicas baseadas nos dados]
-
-💡 *Perspectiva (baseada nos dados):*
-[Análise motivadora mas realista. Ex: "Com X% das semanas em alta e valorização de Y% em 3 meses, este ativo mostra momentum positivo. Pontos de entrada abaixo de R$... podem ser interessantes para investidores de médio prazo — porém a volatilidade recente exige..."]
-
-━━━━━━━━━━━━━━━━
-⚠️ *AVISO:* Esta análise é gerada por IA com fins informativos e não é recomendação formal de investimento. Rentabilidade passada não garante resultados futuros. Consulte um *corretor certificado (CNPI)* antes de decidir.
-Pesquise também em: *Status Invest*, *Infomoney* ou *Rico Investimentos*.
-━━━━━━━━━━━━━━━━
-
-PRINCÍPIOS:
-- Use os números reais do contexto fornecido
-- Seja empolgante sobre o potencial mas honesto sobre os riscos
-- Para cripto: ressalte SEMPRE o risco maior e a volatilidade extrema
-- Para ações B3: mencione setor, dividendos se relevante, posição no índice
-- Finalize sempre com o aviso legal
-- Não diga que é uma IA
-- Nunca faça previsão de preço específico futuro`;
+function buildInvestmentPrompt(marketData: string, userMessage: string): string {
+  return buildZeroDriftInvestmentPrompt(marketData, userMessage);
 }
 
 export async function generateInvestmentAdvice(
@@ -836,7 +928,7 @@ export async function generateInvestmentAdvice(
   history: AIMessage[] = [],
 ): Promise<string | null> {
   const messages: AIMessage[] = [
-    { role: "system", content: buildInvestmentPrompt(marketData) },
+    { role: "system", content: buildInvestmentPrompt(marketData, userMessage) },
     ...history.slice(-4),
     { role: "user", content: userMessage },
   ];
@@ -1367,29 +1459,56 @@ export async function extractTransaction(
   }
 }
 
+/** Detecta resposta provavelmente cortada (finish_reason ou heurística de palavra incompleta). */
+function isLikelyTruncatedContent(content: string, finishReason?: string): boolean {
+  if (finishReason === "length") return true;
+  const trimmed = content.trim();
+  if (!trimmed) return true;
+
+  if (/\/\s*$/.test(trimmed)) return true;
+  if (/aproximadamente\s*\/?\s*$/i.test(trimmed)) return true;
+  if (/:\s*(aproximadamente\s*)?\/?\s*$/i.test(trimmed)) return true;
+
+  const bulletLines = trimmed.split("\n").filter((line) => /^[\*•-]\s/.test(line.trim()));
+  const hintsInText = extractFoodHints(trimmed);
+  if (bulletLines.length >= 1 && hintsInText.length >= 2 && !/total|soma|🔥/i.test(trimmed)) {
+    return true;
+  }
+
+  const lastLine = trimmed.split("\n").pop()?.trim() ?? "";
+  if (!lastLine) return false;
+
+  const endsCleanly =
+    /[.!?…)\]"']$/.test(lastLine) ||
+    /(?:kcal|calorias?|total|✅|🎯|━━|💡)/i.test(lastLine.slice(-16));
+  if (endsCleanly) return false;
+
+  const lastToken = lastLine.split(/\s+/).pop() ?? "";
+  if (lastToken.length > 0 && lastToken.length <= 4 && /^[a-záàâãéêíóôõúç]+:?$/i.test(lastToken)) {
+    return true;
+  }
+
+  if (/^[\*•-]\s/.test(lastLine) && !endsCleanly) return true;
+  if (/aproximadamente\/?$/i.test(lastToken)) return true;
+
+  return false;
+}
+
 // ─── Resposta Geral via IA (fallback inteligente) ────────────────────────────
 export async function generateGeneralResponse(
   userMessage: string,
   history: AIMessage[] = [],
+  options?: { intent?: AiIntent | "unknown"; userName?: string },
 ): Promise<string | null> {
-  const systemPrompt =
-    `Você é o *OZapTeConta*, um assistente financeiro e de saúde via WhatsApp. ` +
-    `Suas capacidades:\n` +
-    `• 💰 Registrar contas a pagar/receber: _"paguei 120 de mercado"_, _"recebi 500 de salário"_\n` +
-    `• 📊 Resumos financeiros: _"resumo do mês"_, _"ver contas de hoje"_\n` +
-    `• 🧮 Taxa Basal (TMB), IMC e metas calóricas\n` +
-    `• 🥗 Plano alimentar personalizado e análise nutricional de alimentos\n` +
-    `• 📈 Análise de ações da B3 e criptomoedas com dados reais\n` +
-    `• 💹 Cotações: dólar, euro, Bitcoin, Selic, IPCA\n` +
-    `• 🚗 Tabela FIPE de veículos\n\n` +
-    `REGRAS:\n` +
-    `1. Responda à pergunta do usuário de forma ÚTIL e CONTEXTUAL — nunca com mensagem genérica\n` +
-    `2. Se for algo que você faz, explique como usar e dê um exemplo prático\n` +
-    `3. Se for pergunta de conhecimento geral (saúde, nutrição, finanças, etc.), responda com informações precisas\n` +
-    `4. Use formatação WhatsApp: *negrito*, _itálico_\n` +
-    `5. Seja conciso: máximo 250 palavras\n` +
-    `6. Responda em português brasileiro informal e amigável\n` +
-    `7. NUNCA peça para o usuário formatar a mensagem de outra forma como resposta inicial — primeiro tente entender e ajudar`;
+  if (looksLikeNutritionMealList(userMessage)) {
+    const nutricao = await analyzeNutrition(userMessage, history);
+    if (nutricao) return nutricao;
+    return null;
+  }
+
+  const intent = options?.intent ?? "unknown";
+  const skinCtx = resolveResponseSkin(intent, userMessage);
+  const systemPrompt = buildZeroDriftSystemPrompt(skinCtx, { userName: options?.userName });
 
   const messages: AIMessage[] = [
     { role: "system", content: systemPrompt },
@@ -1411,23 +1530,44 @@ export async function generateGeneralResponse(
         normalizeModelForProvider(provider.provider, provider.model),
         messages,
         provider.apiUrl,
+        { maxTokens: 1800 },
       );
       const content = providerResult.content.trim();
+      const truncated = isLikelyTruncatedContent(content, providerResult.finishReason);
+
       await writeAiUsageLog({
         ts: new Date().toISOString(),
         provider: provider.provider,
         model: normalizeModelForProvider(provider.provider, provider.model),
         channel: "text",
         stage: "general",
-        success: Boolean(content),
+        success: Boolean(content) && !truncated,
         latencyMs: Date.now() - startedAt,
         fallbackUsed: attempt > 1,
         attempt,
         promptTokens: providerResult.usage?.promptTokens,
         completionTokens: providerResult.usage?.completionTokens,
         totalTokens: providerResult.usage?.totalTokens,
+        error: truncated ? "finish_reason=length (resposta truncada por max_tokens)" : undefined,
       });
-      if (content) return content;
+
+      /* SANITY CHECK: nunca devolver resposta cortada como sucesso */
+      if (truncated) {
+        lastError = new Error(
+          `Resposta geral truncada (${provider.provider}, finishReason=${providerResult.finishReason ?? "heuristic"})`,
+        );
+        logger.warn(`[AIService] ${provider.provider} retornou resposta geral truncada — tentando próximo provider`);
+        continue;
+      }
+
+      if (content) {
+        if (looksLikeNutritionMealList(userMessage) && !isAcceptableNutritionResponse(content, userMessage, provider.provider)) {
+          lastError = new Error(`Resposta geral insuficiente para refeição (${provider.provider})`);
+          logger.warn(`[AIService] ${provider.provider} resposta geral fraca para refeição — tentando próximo provider`);
+          continue;
+        }
+        return content;
+      }
     } catch (err) {
       lastError = err;
       logger.warn(`[AIService] Resposta geral com ${provider.provider} falhou: ${String(err)}`);

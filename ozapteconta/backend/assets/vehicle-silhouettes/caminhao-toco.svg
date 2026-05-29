@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 192" width="256" height="192">
+  <rect width="256" height="192" fill="#ffffff"/>
+  <g fill="none" stroke="#000000" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round">
+    <!-- Caminhão toco: cabine pequena à esquerda + baú/carroceria longa -->
+    <!-- Baú/carroceria -->
+    <path d="M84 60 L228 60 L228 138 L84 138 Z"/>
+    <path d="M84 84 L228 84"/>
+    <path d="M84 110 L228 110"/>
+    <!-- Cabine -->
+    <path d="M16 138 L16 110 Q16 100 22 96 L40 80 Q44 76 50 76 L78 76 Q84 76 84 82 L84 138"/>
+    <!-- Janela cabine -->
+    <path d="M40 82 L74 82 L74 110 L36 110 Z"/>
+    <!-- Chão -->
+    <path d="M8 152 L248 152"/>
+    <!-- Rodas (eixo dianteiro + eixo traseiro simples = "toco") -->
+    <circle cx="50" cy="152" r="14"/>
+    <circle cx="50" cy="152" r="5"/>
+    <circle cx="180" cy="152" r="14"/>
+    <circle cx="180" cy="152" r="5"/>
+    <!-- Para-choque -->
+    <path d="M16 142 L34 142"/>
+    <path d="M216 142 L228 142"/>
+    <!-- Espelhos -->
+    <path d="M24 96 L24 86"/>
+    <path d="M22 86 L26 86"/>
+  </g>
+</svg>

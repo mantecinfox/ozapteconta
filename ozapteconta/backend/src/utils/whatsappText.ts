@@ -29,6 +29,42 @@ const CRIPTO_EMOJI_POR_SIMBOLO: Record<string, string> = {
   BNB: WhatsAppEmoji.cripto,
 };
 
+const WHATSAPP_TEXT_MAX_CHARS = 4096;
+
+/** Limite de legenda em imagens/documentos no WhatsApp (Cloud API / Baileys). */
+export const WHATSAPP_IMAGE_CAPTION_MAX_CHARS = 1024;
+
+/** Margem de segurança abaixo do limite de legenda. */
+export const WHATSAPP_IMAGE_CAPTION_SAFE_CHARS = 980;
+
+/** Divide texto longo em blocos seguros para o limite do WhatsApp (~4096 chars). */
+export function splitWhatsAppText(textoBruto: string, maxChars = WHATSAPP_TEXT_MAX_CHARS): string[] {
+  if (typeof textoBruto !== "string" || textoBruto.length === 0) return [""];
+  const texto = prepareWhatsAppText(textoBruto);
+  if (texto.length <= maxChars) return [texto];
+
+  const blocos: string[] = [];
+  let restante = texto;
+
+  /* MAX_ITER: 64 */ 
+  for (let iter = 0; iter < 64 && restante.length > 0; iter += 1) {
+    if (restante.length <= maxChars) {
+      blocos.push(restante);
+      break;
+    }
+
+    let corte = restante.lastIndexOf("\n\n", maxChars);
+    if (corte < maxChars * 0.4) corte = restante.lastIndexOf("\n", maxChars);
+    if (corte < maxChars * 0.4) corte = restante.lastIndexOf(" ", maxChars);
+    if (corte < maxChars * 0.25) corte = maxChars;
+
+    blocos.push(restante.slice(0, corte).trimEnd());
+    restante = restante.slice(corte).trimStart();
+  }
+
+  return blocos.filter((b) => b.length > 0);
+}
+
 /** Normaliza e valida UTF-8 antes de enviar ao Baileys / API oficial. */
 export function prepareWhatsAppText(textoBruto: string): string {
   if (typeof textoBruto !== "string") {

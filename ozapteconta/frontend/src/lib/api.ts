@@ -123,6 +123,8 @@ export interface AiProvider {
   enabled: boolean;
   isDefault: boolean;
   isAudioDefault: boolean;
+  textPriority: number;
+  audioPriority: number;
 }
 
 export interface AudioModelChainSettings {
@@ -182,7 +184,7 @@ export interface ClientProfile {
   addressCity: string;
   addressState: string;
   addressZipCode: string;
-  plan: "HOME" | "OFFICE" | "FULL";
+  plan: "HOME" | "OFFICE" | "FULL" | "TRAVEL";
   status: "PENDING_ACTIVATION" | "ACTIVE" | "INACTIVE";
   qrToken: string;
   assignedWhatsappAccountId?: number | null;

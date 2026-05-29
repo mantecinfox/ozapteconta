@@ -5,21 +5,87 @@ import { prisma } from "../config/prisma";
 import { config } from "../config";
 import { logger } from "../utils/logger";
 import { extractTransaction, extractTransactionFromAudio, analyzeNutrition, generateDietPlan, generateInvestmentAdvice, generateGeneralResponse, AIMessage } from "./aiService";
-import { sendMessage, downloadMedia, formatCurrency, formatDate } from "./whatsappService";
+import {
+  classifyIntent,
+  disambiguateNutritionVsFinance,
+  isNutritionAdviceQuery,
+  isModelsCommand,
+  isPriceSearchQuery,
+  extractProductQuery,
+  learnFromTurn,
+  shouldPreferFinanceRoute,
+  type IntentClassification,
+} from "./aiLearningService";
+import { comparePrices, checkRateLimit } from "./priceComparison";
+import type { ComparisonSummary } from "./priceComparison";
+import { claimAudioProcessing, withAudioPhoneLock } from "./audioProcessingCoordinator";
+import { sendMessage, sendImageBuffer, downloadMedia, formatCurrency, formatDate, startComposingIndicator } from "./whatsappService";
+import { WHATSAPP_IMAGE_CAPTION_SAFE_CHARS } from "../utils/whatsappText";
 import { transcribeAudio } from "./transcriptionService";
 import { issueClientPortalAccess } from "./clientAccessService";
-import { detectMarketQuery, executeMarketQuery, getMarketHelp, detectInvestmentQuery, analyzeStockForInvestment, analyzeCryptoForInvestment, getTopB3Stocks, getTopCryptosReport, getInvestmentMenu, InvestmentQuery } from "./marketDataService";
-import { detectFipeQuery, queryFipe, getFipeHelp } from "./fipeService";
+import { detectMarketQuery, executeMarketQuery, getMarketHelp, getMacroHelp, detectInvestmentQuery, analyzeStockForInvestment, analyzeCryptoForInvestment, getTopB3Stocks, getTopCryptosReport, getInvestmentMenu, InvestmentQuery } from "./marketDataService";
+import { detectFipeQuery, getFipeHelp, FipeQueryResult } from "./fipeService";
+import { checkFipeSearchAllowed, runFipeQueryWithRateLimit } from "./fipeRateLimitService";
+import { detectFipeZapQuery, getFipeZapHelp, type FipeZapResult } from "./fipeZapService";
+import { checkFipeZapSearchAllowed, runFipeZapQueryWithRateLimit } from "./fipeZapRateLimitService";
+import { buildFullPhraseModelsMessage, buildHelpPhraseModelsPreview } from "./userPhraseModels";
+import { resolveSilhouette, getSilhouettePng } from "./vehicleSilhouetteService";
+import { getNutritionMealPng } from "./nutritionMealImageService";
 import { resolveWhatsappIdentity } from "./whatsappIdentityService";
 import infinityPayService from "./infinityPayService";
+import { applyBillingCycleFromPayment, syncSubscriptionBillingDates } from "./subscriptionBillingCycleService";
+import { interceptIfSubscriptionBlocked } from "./subscriptionAccessService";
+import {
+  buildOnboardingWelcomeMessage,
+  buildTypeStepRetryMessage,
+  resolveOnboardingDisplayName,
+  resolveWelcomeScenario,
+  shouldRestartOnboardingFlow,
+} from "./onboardingWelcomeService";
+import { detectFlightQuery, type FlightSearchResult } from "./flightSearchService";
+import { checkFlightSearchAllowed, runFlightSearchWithRateLimit } from "./flightRateLimitService";
+import {
+  buildFlightSearchIntro,
+  getFlightHelp,
+  handleFlightAssistantTurn,
+  isTravelRelatedQuery,
+  loadFlightWizard,
+} from "./flightAssistantService";
+import {
+  buildTravelPlanBlockMessage,
+  hasFlightSearch,
+  hasFullFeatures,
+} from "./planAccessService";
+import {
+  buildUnclearAudioPrompt,
+  isLikelyUnclearTranscript,
+} from "./zeroDriftResponderService";
 import { sendFinancialReportNow } from "./financialReportService";
+import { detectReportCommand, resolveEmailFromUtterance } from "./reportCommandUtils";
+import { enqueueAndWait } from "../queues/client";
+import { QUEUE_NAMES } from "../queues/names";
+import { phoneticNormalize } from "../utils/textTolerance";
+import { looksLikeNutritionMealList, countNumberedFoodItems } from "./nutritionRouting";
 
 const ONBOARDING_TIMEOUT_MINUTES = 10;
-const AUDIO_PENDING_NOTICE_DELAY_MS = 2500;
+const AUDIO_PENDING_NOTICE_DELAY_MS = Number(process.env.WPP_AUDIO_NOTICE_DELAY_MS ?? 8000);
+const QUEUE_PROGRESS_INTERVAL_MS = Number(process.env.WPP_PROGRESS_INTERVAL_MS ?? 8000);
+const QUEUE_PROGRESS_MAX_NOTICES = Number(process.env.WPP_PROGRESS_MAX_NOTICES ?? 2);
+
+async function logClientInteraction(phone: string, intent: string, channel: "text" | "audio"): Promise<void> {
+  const profile = await prisma.clientProfile.findFirst({
+    where: { phone },
+    select: { id: true },
+  });
+  if (!profile) return;
+  await prisma.clientInteractionLog.create({
+    data: { clientId: profile.id, userPhone: phone, intent, channel },
+  });
+}
 
 function scheduleAudioPendingNotice(phone: string): { cancel: () => void } {
   const timeoutRef = setTimeout(() => {
-    sendMessage(phone, "🎤 Recebemos seu áudio. Aguarde alguns instantes, por gentileza.")
+    sendMessage(phone, "🎤 Estou analisando seu áudio, só um instante...")
       .catch((err) => logger.warn(`[Audio] Falha ao enviar aviso de processamento: ${String(err)}`));
   }, AUDIO_PENDING_NOTICE_DELAY_MS);
 
@@ -107,26 +173,59 @@ async function fetchCepDataWithRetries(cep: string, maxAttempts = 3): Promise<Re
   return null;
 }
 
+async function formatPlanPrice(planName: string, fallback: string): Promise<string> {
+  const planRow = await prisma.subscriptionPlan.findUnique({ where: { plan: planName as "HOME" | "FULL" | "TRAVEL" | "OFFICE" } });
+  return planRow ? Number(planRow.priceMonthly).toFixed(2).replace(".", ",") : fallback;
+}
+
 async function sendPlanOptions(phone: string) {
-  const plans = await prisma.subscriptionPlan.findMany({ orderBy: { priceMonthly: "asc" } });
-  const fmt = (planName: string, def: string) => {
-    const p = plans.find((x) => x.plan === planName);
-    return p ? Number(p.priceMonthly).toFixed(2).replace(".", ",") : def;
-  };
+  const [homePrice, fullPrice, travelPrice] = await Promise.all([
+    formatPlanPrice("HOME", "4,90"),
+    formatPlanPrice("FULL", "9,90"),
+    formatPlanPrice("TRAVEL", "59,90"),
+  ]);
   await sendMessage(
     phone,
     "🎯 *Escolha o seu plano:*\n\n" +
-      `1️⃣ *BÁSICO* — R$ ${fmt("HOME", "4,90")}/mês\n   Contas a pagar/receber (PF e PJ)\n   _Sem FIPE e sem Mercado Financeiro_\n\n` +
-      `2️⃣ *COMPLETO* — R$ ${fmt("FULL", "9,90")}/mês\n   Todos os recursos liberados\n\n` +
-      "Digite *1* ou *2*:"
+      `1️⃣ *BÁSICO* — R$ ${homePrice}/mês\n   Contas a pagar/receber (PF e PJ)\n   _Sem FIPE, mercado ou voos_\n\n` +
+      `2️⃣ *COMPLETO* — R$ ${fullPrice}/mês\n   FIPE, FipeZap, mercado, IPCA/CDI e mais\n\n` +
+      `3️⃣ *TRAVEL* — R$ ${travelPrice}/mês\n   Tudo do Completo + *busca de voos* nacionais\n\n` +
+      "Digite *1*, *2* ou *3*:"
+  );
+}
+
+async function sendOnboardingWelcome(
+  phone: string,
+  clientMessage: string,
+  scenario: "new" | "returning",
+  displayName: string | undefined,
+  expiredReset: boolean,
+): Promise<void> {
+  await setRegistrationStep(phone, "type", {});
+  await sendMessage(
+    phone,
+    buildOnboardingWelcomeMessage({
+      clientMessage,
+      displayName,
+      scenario,
+      expiredReset,
+      timeoutMinutes: ONBOARDING_TIMEOUT_MINUTES,
+    }),
   );
 }
 
 async function handleOnboarding(
-  user: { registrationStep: string | null; registrationData: unknown; updatedAt: Date; createdAt: Date },
+  user: {
+    registrationStep: string | null;
+    registrationData: unknown;
+    updatedAt: Date;
+    createdAt: Date;
+    name: string | null;
+  },
   phone: string,
   text: string,
-  aliases: string[] = []
+  aliases: string[] = [],
+  senderName?: string,
 ): Promise<boolean> {
   const candidatePhones = Array.from(new Set([phone, ...aliases].filter(Boolean)));
   const trimmed = text.trim();
@@ -134,13 +233,15 @@ async function handleOnboarding(
   let step = user.registrationStep;
   let regData = (user.registrationData || {}) as RegData;
   let expiredAndReset = false;
+  const displayName = resolveOnboardingDisplayName(user.name, senderName);
+  const greetingRestart = shouldRestartOnboardingFlow(trimmed);
 
   // Se o cadastro ficar parado por 10 minutos, limpa o estado e reinicia do zero.
   if (step && step !== "pending") {
     const referenceTime =
       regData.onboardingUpdatedAt
         ? new Date(regData.onboardingUpdatedAt)
-        : user.createdAt;
+        : user.updatedAt;
     const elapsedMs = nowMs - referenceTime.getTime();
     if (elapsedMs > ONBOARDING_TIMEOUT_MINUTES * 60 * 1000) {
       await prisma.whatsappUser.update({
@@ -171,16 +272,35 @@ async function handleOnboarding(
   }
 
   if (profile) {
-    if (profile.status === "ACTIVE" && profile.subscription?.status === "ACTIVE") {
+    if (
+      profile.status === "ACTIVE" &&
+      profile.subscription &&
+      ["ACTIVE", "SUSPENDED", "PAST_DUE"].includes(profile.subscription.status)
+    ) {
+      const blocked = await interceptIfSubscriptionBlocked(phone);
+      if (blocked) {
+        if (user.registrationStep) await setRegistrationStep(phone, null);
+        return true;
+      }
+      if (profile.subscription.status !== "ACTIVE") {
+        await prisma.clientSubscription.update({
+          where: { id: profile.subscription.id },
+          data: { status: "ACTIVE" },
+        });
+      }
       if (user.registrationStep) await setRegistrationStep(phone, null);
-      return false; // ativo — usa o sistema normalmente
+      return false;
     }
 
     if (profile.subscription?.status === "ACTIVE" && profile.status !== "ACTIVE") {
+      const activatedAt = new Date();
       await prisma.clientProfile.update({
         where: { id: profile.id },
-        data: { status: "ACTIVE", activatedAt: new Date() },
+        data: { status: "ACTIVE", activatedAt },
       });
+      if (profile.subscription.id) {
+        await syncSubscriptionBillingDates(profile.subscription.id);
+      }
       await setRegistrationStep(phone, null);
       await sendMessage(
         phone,
@@ -247,19 +367,23 @@ async function handleOnboarding(
   }
 
   // 2. Sem perfil — fluxo de cadastro passo a passo
-  // Primeiro contato
+  const welcomeScenario = resolveWelcomeScenario({
+    registrationStep: step,
+    registrationData: regData as Record<string, unknown>,
+    createdAt: user.createdAt,
+    expiredReset: expiredAndReset,
+    greetingRestart,
+  });
+
+  // Saudação ou pedido de recomeço durante cadastro incompleto → recepção cordial do zero
+  if (step && step !== "pending" && greetingRestart) {
+    await sendOnboardingWelcome(phone, trimmed, welcomeScenario, displayName, expiredAndReset);
+    return true;
+  }
+
+  // Primeiro contato ou cadastro sem step ativo
   if (!step) {
-    await setRegistrationStep(phone, "type", {});
-    await sendMessage(
-      phone,
-      (expiredAndReset
-        ? `⏱️ *Seu cadastro anterior expirou* por inatividade de mais de ${ONBOARDING_TIMEOUT_MINUTES} minutos.\n` +
-          `🗑️ Os dados parciais foram *anulados* e o cadastro foi *reiniciado do zero*.\n\n`
-        : "") +
-        "👋 *Bem-vindo ao ozapteconta!*\n\n" +
-        "Para usar nosso sistema, precisamos de um cadastro rápido.\n\n" +
-        "Você é:\n1️⃣ *Pessoa Física* (CPF)\n2️⃣ *Pessoa Jurídica* (CNPJ)\n\nDigite *1* ou *2*:"
-    );
+    await sendOnboardingWelcome(phone, trimmed, welcomeScenario, displayName, expiredAndReset);
     return true;
   }
 
@@ -267,7 +391,10 @@ async function handleOnboarding(
     case "type": {
       const choice = trimmed.replace(/\D/g, "");
       if (choice !== "1" && choice !== "2") {
-        await sendMessage(phone, "❌ Digite *1* para Pessoa Física ou *2* para Pessoa Jurídica:");
+        await sendMessage(
+          phone,
+          buildTypeStepRetryMessage({ clientMessage: trimmed, displayName }),
+        );
         return true;
       }
       const clientType: "PF" | "PJ" = choice === "1" ? "PF" : "PJ";
@@ -519,16 +646,17 @@ async function handleOnboarding(
 
     case "plan": {
       const choice = trimmed.replace(/\D/g, "");
-      const planMap: Record<string, { plan: "HOME" | "FULL"; context: "PESSOAL" | "COMERCIAL" }> = {
+      const planMap: Record<string, { plan: "HOME" | "FULL" | "TRAVEL"; context: "PESSOAL" | "COMERCIAL" }> = {
         "1": { plan: "HOME", context: "PESSOAL" },
         "2": { plan: "FULL", context: "PESSOAL" },
+        "3": { plan: "TRAVEL", context: "PESSOAL" },
       };
       const selected = planMap[choice];
       if (!selected) {
-        await sendMessage(phone, "❌ Opção inválida. Digite *1* ou *2*:");
+        await sendMessage(phone, "❌ Opção inválida. Digite *1*, *2* ou *3*:");
         return true;
       }
-      const defaultPrices = { HOME: 4.9, FULL: 9.9 };
+      const defaultPrices = { HOME: 4.9, FULL: 9.9, TRAVEL: 59.9 };
       const dbPlan = await prisma.subscriptionPlan.findUnique({ where: { plan: selected.plan } });
       const price = dbPlan ? Number(dbPlan.priceMonthly) : defaultPrices[selected.plan];
       const priceStr = price.toFixed(2).replace(".", ",");
@@ -609,7 +737,6 @@ async function handleOnboarding(
             plan: selected.plan,
             status: "PENDING",
             priceMonthly: price,
-            nextBillingDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
           },
         });
 
@@ -843,27 +970,106 @@ async function handleOnboarding(
     }
 
     default: {
-      await setRegistrationStep(phone, "type", {});
-      await sendMessage(
-        phone,
-        "👋 Olá! Vamos iniciar seu cadastro.\n\nVocê é:\n1️⃣ *Pessoa Física* (CPF)\n2️⃣ *Pessoa Jurídica* (CNPJ)\n\nDigite *1* ou *2*:"
-      );
+      await sendOnboardingWelcome(phone, trimmed, welcomeScenario, displayName, expiredAndReset);
       return true;
     }
   }
+}
+
+/**
+ * Envia uma resposta FIPE. Quando a consulta foi bem-sucedida e temos marca +
+ * modelo + tipo, anexa a silhueta (PNG B&W gerada do SVG) como imagem + caption.
+ * Em qualquer falha de resolução/render/envio, faz fallback para texto puro.
+ */
+async function sendFipeWithSilhouette(
+  to: string,
+  fipeResult: FipeQueryResult,
+): Promise<void> {
+  if (!fipeResult.success || !fipeResult.brandName || !fipeResult.modelName || !fipeResult.vehicleType) {
+    await sendMessage(to, fipeResult.message);
+    return;
+  }
+
+  try {
+    const resolution = await resolveSilhouette(
+      fipeResult.brandName,
+      fipeResult.modelName,
+      fipeResult.vehicleType,
+    );
+    const png = getSilhouettePng(resolution.key);
+    if (!png) {
+      await sendMessage(to, fipeResult.message);
+      return;
+    }
+
+    const sent = await sendImageBuffer(to, {
+      buffer: png,
+      mimeType: "image/png",
+      caption: fipeResult.message,
+      fileName: `silhouette-${resolution.key}.png`,
+    });
+    /* SANITY CHECK: se imagem falhou, garante que o texto chegue. */
+    if (!sent) {
+      await sendMessage(to, fipeResult.message);
+    }
+  } catch (err) {
+    logger.warn(`[fipe] envio com silhueta falhou para ${to}, caindo para texto`, err);
+    await sendMessage(to, fipeResult.message);
+  }
+}
+
+/** Resposta de análise calórica/macros com imagem fixa de refeição saudável. */
+async function sendNutritionWithMealImage(to: string, caption: string): Promise<void> {
+  const text = String(caption || "").trim();
+  if (!text) return;
+
+  /* SANITY CHECK: legenda de imagem no WhatsApp trunca em ~1024 chars — texto longo vai em mensagem separada */
+  const legendaLonga = text.length > WHATSAPP_IMAGE_CAPTION_SAFE_CHARS;
+  const legendaImagem = legendaLonga
+    ? "🍽️ *Análise nutricional da sua refeição* — cálculo completo na mensagem abaixo 👇"
+    : text;
+
+  try {
+    const png = getNutritionMealPng();
+    if (!png) {
+      await sendMessage(to, text);
+      return;
+    }
+
+    const sent = await sendImageBuffer(to, {
+      buffer: png,
+      mimeType: "image/png",
+      caption: legendaImagem,
+      fileName: "refeicao-saudavel.png",
+    });
+
+    if (legendaLonga) {
+      await sendMessage(to, text);
+    } else if (!sent) {
+      await sendMessage(to, text);
+    }
+  } catch (err) {
+    logger.warn(`[nutrition-meal] envio com imagem falhou para ${to}, caindo para texto`, err);
+    await sendMessage(to, text);
+  }
+}
+
+/** Indica se a resposta é análise nutricional (calorias/macros), não menu ou esclarecimento. */
+function isCalorieMacroAnalysisResponse(response: string): boolean {
+  const body = String(response || "");
+  if (body.length < 40) return false;
+  if (/posso te ajudar|o que você quer saber|me diz:|exemplo:|menu|esclarec/i.test(body)) {
+    return false;
+  }
+  return /🔥|caloria|kcal|ccal|prote[ií]na|carbo|gordura|refei[cç][aã]o|macro|avalia[cç][aã]o:/i.test(body);
 }
 
 // ─── Detectar comando do usuário ──────────────────────────────────────────────
 function detectCommand(text: string): string | null {
   const t = text.toLowerCase().trim();
 
-  if (/(email|e-mail)/.test(t) && /(pdf|relat[oó]rio|resumo)/.test(t) && /(enviar|envia|envie|manda|mandar|gerar|gera)/.test(t)) {
-    return "report_email";
-  }
-
-  if (/^(gerar|gera|enviar|envia)\s+(pdf|relat[oó]rio)(\s+agora)?$/.test(t) || /^(pdf|relat[oó]rio)\s+agora$/.test(t)) {
-    return "report_now";
-  }
+  const reportCmd = detectReportCommand(text);
+  if (reportCmd) return reportCmd;
 
   if (/^(ver|listar|contas|o que|oque|pendente|vencer|mes|mês|pagar|receber)/.test(t) ||
       /contas (do mes|do mês|a pagar|a receber|pendentes|vencendo|abertas)/.test(t) ||
@@ -877,6 +1083,10 @@ function detectCommand(text: string): string | null {
 
   if (/^(resumo|saldo|total|financeiro|balanço|balanco)/.test(t)) return "summary";
 
+  if (isModelsCommand(text)) return "models";
+
+  if (isPriceSearchQuery(text)) return "price_search";
+
   if (/^(ajuda|help|comandos|menu|oi|olá|ola|inicio|início|start|boa|bom)/.test(t)) return "help";
 
   if (/\b(mercado|financeiro|cotacoes?)\b/.test(t) ||
@@ -884,41 +1094,146 @@ function detectCommand(text: string): string | null {
 
   if (/^(fipe|tabela fipe|consulta fipe|ajuda fipe|como consultar fipe)$/.test(t)) return "fipe_help";
 
+  if (/^(fipezap|fipe zap|ajuda fipezap|indice imovel|indice imobiliario)$/.test(t)) return "fipezap_help";
+
+  if (/^(voo|voos|passagem|passagens|ajuda voo|ajuda voos|busca voo|buscar voos?)$/.test(t)) return "flight_help";
+
+  if (/^(indicadores|indices|macro|ajuda indicadores)$/.test(t)) return "macro_help";
+
   return null;
 }
 
 function extractEmailFromText(text: string): string | null {
-  const match = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  return match ? match[0].toLowerCase() : null;
+  return resolveEmailFromUtterance(text).email;
+}
+
+async function executeReportEmailFlow(
+  canonicalPhone: string,
+  text: string,
+  options?: { audioPrefix?: boolean },
+): Promise<string> {
+  const resolved = resolveEmailFromUtterance(text);
+  const prefix = options?.audioPrefix ? `🎤 _"${text}"_\n\n` : "";
+
+  if (!resolved.email) {
+    if (resolved.suggestedEmail) {
+      return (
+        `${prefix}📧 Quase lá! O e-mail pareceu incompleto na transcrição.\n\n` +
+        `Você quis dizer *${resolved.suggestedEmail}*?\n\n` +
+        `Confirme em texto:\n` +
+        `• _enviar pdf do resumo para email ${resolved.suggestedEmail}_`
+      );
+    }
+    return (
+      `${prefix}📧 Para enviar o PDF das contas por e-mail, preciso do endereço completo.\n\n` +
+      `Exemplos:\n` +
+      `• _enviar pdf do resumo para email nome@dominio.com_\n` +
+      `• _enviar pdf das contas para email mantecinfox@gmail.com_`
+    );
+  }
+
+  await sendMessage(
+    canonicalPhone,
+    `${prefix}📨 Recebi seu pedido. Estou preparando o PDF das suas contas para *${resolved.email}*. ` +
+      "Aguarde alguns instantes.",
+  );
+
+  const reportResult = await sendFinancialReportNow(canonicalPhone, resolved.email);
+  await learnFromTurn({
+    text,
+    intent: "report",
+    success: reportResult.message.includes("enviado") || reportResult.message.includes("sucesso"),
+    channel: options?.audioPrefix ? "audio" : "text",
+    notes: "Envio de relatório PDF por e-mail",
+  });
+
+  return reportResult.message;
 }
 
 // ─── Obter ou criar usuário WhatsApp ─────────────────────────────────────────
 async function getOrCreateUser(phone: string, name?: string, aliases: string[] = []) {
   const candidates = Array.from(new Set([phone, ...aliases].filter(Boolean)));
 
-  const existing = await prisma.whatsappUser.findFirst({
-    where: { phone: { in: candidates } },
-    select: {
-      id: true,
-      phone: true,
-      name: true,
-      conversationContext: true,
-      isActive: true,
-      totalTransactions: true,
-      registrationStep: true,
-      registrationData: true,
-      updatedAt: true,
-      createdAt: true,
-    },
-  });
+  return prisma.$transaction(async (tx) => {
+    const users = await tx.whatsappUser.findMany({
+      where: { phone: { in: candidates } },
+      select: {
+        id: true,
+        phone: true,
+        name: true,
+        conversationContext: true,
+        isActive: true,
+        totalTransactions: true,
+        registrationStep: true,
+        registrationData: true,
+        updatedAt: true,
+        createdAt: true,
+      },
+      orderBy: { id: "asc" },
+    });
 
-  if (existing) {
-    if (existing.phone !== phone || (name && existing.name !== name)) {
-      return prisma.whatsappUser.update({
-        where: { id: existing.id },
+    const canonical = users.find((u) => u.phone === phone) || null;
+
+    if (!canonical && users.length > 0) {
+      const base = users[0];
+      const moved = await tx.whatsappUser.update({
+        where: { id: base.id },
         data: {
-          ...(existing.phone !== phone ? { phone } : {}),
-          ...(name && existing.name !== name ? { name } : {}),
+          phone,
+          ...(name && base.name !== name ? { name } : {}),
+        },
+        select: {
+          id: true,
+          phone: true,
+          name: true,
+          conversationContext: true,
+          isActive: true,
+          totalTransactions: true,
+          registrationStep: true,
+          registrationData: true,
+          updatedAt: true,
+          createdAt: true,
+        },
+      });
+
+      const duplicates = users.filter((u) => u.id !== moved.id);
+      let mergedTotalTransactions = moved.totalTransactions;
+      let mergedName = moved.name;
+      let mergedConversationContext = moved.conversationContext;
+      let mergedRegistrationStep = moved.registrationStep;
+      let mergedRegistrationData = moved.registrationData;
+      let mergedIsActive = moved.isActive;
+
+      for (const duplicate of duplicates) {
+        await tx.financialTransaction.updateMany({
+          where: { userPhone: duplicate.phone },
+          data: { userPhone: phone },
+        });
+
+        await tx.audioMessage.updateMany({
+          where: { userPhone: duplicate.phone },
+          data: { userPhone: phone },
+        });
+
+        mergedTotalTransactions += duplicate.totalTransactions;
+        mergedName = mergedName || duplicate.name;
+        mergedConversationContext = mergedConversationContext || duplicate.conversationContext;
+        mergedRegistrationStep = mergedRegistrationStep || duplicate.registrationStep;
+        mergedRegistrationData = mergedRegistrationData || duplicate.registrationData;
+        mergedIsActive = mergedIsActive || duplicate.isActive;
+
+        await tx.whatsappUser.delete({ where: { id: duplicate.id } });
+      }
+
+      return tx.whatsappUser.update({
+        where: { id: moved.id },
+        data: {
+          totalTransactions: mergedTotalTransactions,
+          ...(name ? { name } : mergedName ? { name: mergedName } : {}),
+          ...(mergedConversationContext ? { conversationContext: mergedConversationContext } : {}),
+          ...(mergedRegistrationStep ? { registrationStep: mergedRegistrationStep } : {}),
+          ...(mergedRegistrationData ? { registrationData: mergedRegistrationData as Prisma.InputJsonValue } : {}),
+          isActive: mergedIsActive,
         },
         select: {
           id: true,
@@ -934,23 +1249,77 @@ async function getOrCreateUser(phone: string, name?: string, aliases: string[] =
         },
       });
     }
-    return existing;
-  }
 
-  return prisma.whatsappUser.create({
-    data: { phone, name: name || null },
-    select: {
-      id: true,
-      phone: true,
-      name: true,
-      conversationContext: true,
-      isActive: true,
-      totalTransactions: true,
-      registrationStep: true,
-      registrationData: true,
-      updatedAt: true,
-      createdAt: true,
-    },
+    if (canonical) {
+      const duplicates = users.filter((u) => u.id !== canonical.id);
+      let mergedTotalTransactions = canonical.totalTransactions;
+      let mergedName = canonical.name;
+      let mergedConversationContext = canonical.conversationContext;
+      let mergedRegistrationStep = canonical.registrationStep;
+      let mergedRegistrationData = canonical.registrationData;
+      let mergedIsActive = canonical.isActive;
+
+      for (const duplicate of duplicates) {
+        await tx.financialTransaction.updateMany({
+          where: { userPhone: duplicate.phone },
+          data: { userPhone: phone },
+        });
+
+        await tx.audioMessage.updateMany({
+          where: { userPhone: duplicate.phone },
+          data: { userPhone: phone },
+        });
+
+        mergedTotalTransactions += duplicate.totalTransactions;
+        mergedName = mergedName || duplicate.name;
+        mergedConversationContext = mergedConversationContext || duplicate.conversationContext;
+        mergedRegistrationStep = mergedRegistrationStep || duplicate.registrationStep;
+        mergedRegistrationData = mergedRegistrationData || duplicate.registrationData;
+        mergedIsActive = mergedIsActive || duplicate.isActive;
+
+        await tx.whatsappUser.delete({ where: { id: duplicate.id } });
+      }
+
+      return tx.whatsappUser.update({
+        where: { id: canonical.id },
+        data: {
+          totalTransactions: mergedTotalTransactions,
+          ...(name && canonical.name !== name ? { name } : {}),
+          ...(mergedConversationContext ? { conversationContext: mergedConversationContext } : {}),
+          ...(mergedRegistrationStep ? { registrationStep: mergedRegistrationStep } : {}),
+          ...(mergedRegistrationData ? { registrationData: mergedRegistrationData as Prisma.InputJsonValue } : {}),
+          isActive: mergedIsActive,
+        },
+        select: {
+          id: true,
+          phone: true,
+          name: true,
+          conversationContext: true,
+          isActive: true,
+          totalTransactions: true,
+          registrationStep: true,
+          registrationData: true,
+          updatedAt: true,
+          createdAt: true,
+        },
+      });
+    }
+
+    return tx.whatsappUser.create({
+      data: { phone, name: name || null },
+      select: {
+        id: true,
+        phone: true,
+        name: true,
+        conversationContext: true,
+        isActive: true,
+        totalTransactions: true,
+        registrationStep: true,
+        registrationData: true,
+        updatedAt: true,
+        createdAt: true,
+      },
+    });
   });
 }
 
@@ -965,6 +1334,26 @@ async function saveContext(phone: string, history: AIMessage[]) {
     where: { phone },
     data: { conversationContext: history.slice(-10) as unknown as Prisma.InputJsonValue },
   });
+}
+
+/** Grava mensagem do usuário cedo — permite recuperação se o WhatsApp enviar payload incompleto. */
+export async function appendUserContextEarly(phone: string, text: string): Promise<void> {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return;
+
+  const identity = await resolveWhatsappIdentity(phone);
+  const canonicalPhone = identity.canonicalPhone || phone;
+  const user = await prisma.whatsappUser.findUnique({
+    where: { phone: canonicalPhone },
+    select: { conversationContext: true },
+  });
+  if (!user) return;
+
+  const history = parseContext(user.conversationContext);
+  const last = history[history.length - 1];
+  if (last?.role === "user" && last.content === trimmed) return;
+
+  await saveContext(canonicalPhone, [...history, { role: "user", content: trimmed }]);
 }
 
 // ─── Resposta por base de conhecimento treinada no admin ────────────────────
@@ -991,13 +1380,86 @@ async function findKnowledgeAnswer(text: string): Promise<string | null> {
 
 function isNutritionQuery(text: string): boolean {
   const normalized = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const phonetic = phoneticNormalize(normalized);
+  const t = (r: RegExp) => r.test(normalized) || (phonetic !== normalized && r.test(phonetic));
 
-  const nutritionIntent = /caloria|kcal|proteina|carbo|gordura|fibra|saudavel|engorda|emagrece|dieta|indice glicemico|sodio|colesterol|vitamina|mineral|porcao|quantidade|pode comer|deve comer|faz bem|faz mal|refeicao|alimento|alimentacao|comida|lanche|janta|jantar|cafe da manha|cafe da tarde|ceia|quantas vezes|quanto tempo posso comer|tmb|metabolismo|metabolismo basal|taxa basal|taxa metabolica|taxa metab|imc|indice de massa|tdee|gasto calorico|calorias.*dia|proteina.*dia|quanto.*proteina|deficit calorico|superavit|bulking|cutting|hipertrofia|musculacao|calistenia|crossfit|treino.*comer|comer.*treino|pre.*treino|pos.*treino/;
-  const foodTerms = /arroz|feijao|frango|ovo|banana|maca|pao|queijo|leite|carne|peixe|batata|mandioca|salada|alface|tomate|abacate|aveia|iogurte|whey|way|suplemento|pizza|hamburguer|hamburger|sushi|refrigerante|bolo|chocolate|biscoito|bolacha|macarrao|pastel|coxinha|acai|suco|cafe|marmita|lanche|cottage|granola|tapioca|inhame|quinoa|brocolis|espinafre|atum|salmao|tilapia|peito.*frango|clara.*ovo/;
+  const nutritionIntent = /caloria|kcal|ccal|proteina|carbo|gordura|fibra|saudavel|engorda|emagrece|dieta|indice glicemico|sodio|colesterol|vitamina|mineral|porcao|quantidade|pode comer|deve comer|faz bem|faz mal|refeicao|alimento|alimentacao|comida|lanche|janta|jantar|cafe da manha|cafe da tarde|ceia|quantas vezes|quanto tempo posso comer|tmb|metabolismo|metabolismo basal|taxa basal|taxa metabolica|taxa metab|imc|indice de massa|tdee|gasto calorico|calorias.*dia|proteina.*dia|quanto.*proteina|deficit calorico|superavit|bulking|cutting|hipertrofia|musculacao|calistenia|crossfit|treino.*comer|comer.*treino|pre.*treino|pos.*treino/;
+  const foodTerms = /arroz|feijao|frango|ovo|banana|bananas|maca|pao|queijo|leite|carne|peixe|batata|mandioca|salada|alface|tomate|abacate|aveia|mel|iogurte|yogurte|whey|way|vhei|vei|suplemento|pizza|hamburguer|hamburger|sushi|refrigerante|bolo|chocolate|biscoito|bolacha|macarrao|pastel|coxinha|acai|suco|cafe|marmita|lanche|cottage|granola|tapioca|inhame|quinoa|brocolis|espinafre|atum|salmao|tilapia|peito.*frango|clara.*ovo/;
 
-  if (nutritionIntent.test(normalized)) return true;
-  return foodTerms.test(normalized) && /(quant|caloria|saudavel|engorda|emagrece|pode comer|deve comer|faz bem|faz mal|porcao|quantidade|proteina|macro)/.test(normalized);
+  if (shouldPreferFinanceRoute(text)) return false;
+  if (isNutritionAdviceQuery(text)) return true;
+  if (looksLikeNutritionMealList(text)) return true;
+
+  const disamb = disambiguateNutritionVsFinance(text);
+  if (disamb === "finance") return false;
+  if (disamb === "nutrition") return true;
+
+  if (t(nutritionIntent)) return true;
+
+  if (
+    t(/\b(cafe da manha|almoco|jantar|ceia|lanche da tarde|refeicao)\b/) &&
+    t(/\b\d+\s*(ovos?|bananas?|fatias?|copos?|colheres?|gramas?|g\b)\b/)
+  ) {
+    return true;
+  }
+
+  if (countNumberedFoodItems(text) >= 2 && t(foodTerms)) return true;
+
+  if (t(/\b(calcular|calculo|me ajuda a calcular|vamos calcular)\b/) && t(/\b(caloria|kcal|refeicao|cafe da manha)\b/)) {
+    return true;
+  }
+
+  if (t(/\b\d+\s*ovos?\b/) && t(foodTerms)) return true;
+  if (looksLikeNutritionMealDescription(text)) return true;
+
+  return (
+    t(foodTerms) &&
+    t(/(quant|caloria|saudavel|engorda|emagrece|pode comer|deve comer|faz bem|faz mal|porcao|quantidade|proteina|macro)/)
+  );
 }
+
+/** Descreve refeição/alimentos com quantidades sem palavra "caloria" explícita. */
+function looksLikeNutritionMealDescription(text: string): boolean {
+  if (!text || shouldPreferFinanceRoute(text)) return false;
+  return looksLikeNutritionMealList(text);
+}
+
+function shouldSkipFinanceExtraction(text: string): boolean {
+  if (shouldPreferFinanceRoute(text)) return false;
+  if (isNutritionQuery(text) || looksLikeNutritionMealDescription(text)) return true;
+  if (isNutritionAdviceQuery(text)) return true;
+  if (detectMarketQuery(text)) return true;
+  if (detectFipeQuery(text)) return true;
+  if (detectFipeZapQuery(text)) return true;
+  if (detectInvestmentQuery(text)) return true;
+  if (isPriceSearchQuery(text)) return true;
+
+  const normalized = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const openQuestion =
+    /\?/.test(normalized) ||
+    /^(como|qual|quais|quanto|por que|porque|me (fala|diga|explica|ajuda|ajude)|explique|o que e|o que eh|preciso saber|me conta|pode me|me diz)/.test(
+      normalized.trim(),
+    );
+  const financeSignal =
+    /\b(r\$|reais|real|vence|vencimento|boleto|fatura|paguei|pagar|recebi|receber|gastei|comprei|compra|salario|aluguel|conta de luz)\b/.test(
+      normalized,
+    );
+  const amountLikeFinance = /\b\d+\s*(reais|real|r\$)\b/.test(normalized) || /\br\$\s*\d/.test(normalized);
+
+  return openQuestion && !financeSignal && !amountLikeFinance;
+}
+
+const GENERIC_ASSISTANT_FALLBACK =
+  `❓ Não entendi o que você quer fazer.\n\n` +
+  `Posso te ajudar com:\n` +
+  `• 💰 Registrar contas a pagar ou receber\n` +
+  `• 📊 Ver seu resumo financeiro\n` +
+  `• 🥗 Calorias e informações de alimentos\n` +
+  `• 🧮 Calcular IMC ou taxa basal\n\n` +
+  `Exemplos:\n` +
+  `_"Paguei 150 reais de mercado"_\n` +
+  `_"Quantas calorias tem frango?"_\n` +
+  `_"Calcule meu IMC, sou mulher 65kg 1,62m 28 anos"_`;
 
 // ─── Calculadora de Métricas Corporais ────────────────────────────────────────
 
@@ -1220,8 +1682,10 @@ function formatBMRResponse(text: string): string {
 
 function isBMRQuery(text: string): boolean {
   const n = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-  const explicitBMR = /\b(tmb|taxa basal|taxa metabolica|taxa metab|metabolismo basal|metabolismo|imc|indice de massa|calcular.*metabolismo|calcular.*imc|meu.*metabolismo|minha.*taxa|tdee|gasto calorico|necessidade calorica|calorias.*dia|quantas calorias.*preciso|quanto.*caloria.*preciso|taxa.*basal|basal)\b/.test(n);
-  const implicitBMR = /(peso|kg|altura|metros|cm|anos)/.test(n) && /(metabolismo|imc|caloria|tmb|tdee|emagrec|ganhar|treino|deficit|superavit|basal)/.test(n);
+  const p = phoneticNormalize(n);
+  const t = (r: RegExp) => r.test(n) || (p !== n && r.test(p));
+  const explicitBMR = t(/\b(tmb|taxa basal|taxa metabolica|taxa metab|metabolismo basal|metabolismo|imc|indice de massa|calcular.*metabolismo|calcular.*imc|meu.*metabolismo|minha.*taxa|tdee|gasto calorico|necessidade calorica|calorias.*dia|quantas calorias.*preciso|quanto.*caloria.*preciso|taxa.*basal|basal)\b/);
+  const implicitBMR = t(/(peso|kg|altura|metros|cm|anos)/) && t(/(metabolismo|imc|caloria|tmb|tdee|emagrec|ganhar|treino|deficit|superavit|basal)/);
   return explicitBMR || implicitBMR;
 }
 
@@ -1332,6 +1796,7 @@ type LoadingType =
   | "diet_plan"
   | "nutrition_ai"
   | "market_data"
+  | "fipezap_data"
   | "finance_ai"
   | "commerce_ai"
   | "general_ai";
@@ -1359,14 +1824,18 @@ const LOADING_MESSAGES: Record<LoadingType, string[]> = {
     `⚖️ *Calculando seu plano alimentar ideal...*\n_Analisando seu objetivo, metabolismo e preferências. Pode levar até 20 segundos!_ 🥗`,
   ],
   nutrition_ai: [
-    `🔍 *Consultando nossa base nutricional...*\n_Verificando calorias, macros e informações do alimento. Aguarde!_ ⏳`,
-    `🥦 *Nossa IA nutricional está analisando...*\n_Buscando dados de proteínas, carboidratos e gorduras. Só um instante!_ 💪`,
-    `📊 *Calculando os macros...*\n_Verificando a composição nutricional completa. Quase pronto!_ 🍎`,
+    `🍎🥚 *IA nutricional analisando...*\nCalculando calorias, proteinas, carbos e gorduras. Ja te respondo. 💪`,
+    `🥗📊 *Calculando os macros...*\nVerificando calorias e nutrientes do alimento. Um instante. ✨`,
+    `🍞🍳 *Consulta nutricional em andamento...*\nEstou conferindo calorias, proteinas e gorduras para responder certinho. ✅`,
   ],
   market_data: [
-    `💹 *Nossa IA financeira está analisando...*\n_Buscando cotações e indicadores econômicos em tempo real. Só um instante!_ ⏳`,
-    `📡 *Consultando o mercado financeiro...*\n_Coletando os dados mais recentes para sua pergunta. Aguarde!_ 📊`,
-    `🌐 *Atualizando dados de finanças...*\n_Conectando às principais fontes de mercado. Quase pronto!_ 💰`,
+    `💹📈 *Buscando cotacoes agora...*\nConsultando os dados mais recentes do mercado. Ja te respondo. ⚡`,
+    `📡💰 *Consultando o mercado financeiro...*\nAtualizando precos e indicadores em tempo real. Um instante. ✅`,
+    `🌐📊 *Atualizando dados de mercado...*\nConectando as fontes de cotacao para responder certinho. 🚀`,
+  ],
+  fipezap_data: [
+    `🏠 *Consultando FipeZap...*\nBuscando índice de imóveis com fallback automático. Um instante. ✅`,
+    `📊 *Atualizando índice imobiliário...*\nConectando fontes oficiais e cache local. Aguarde! ⏳`,
   ],
   finance_ai: [
     `💼 *Nossa IA financeira está analisando...*\n_Buscando valores, categorias e contexto da sua movimentação. Só um instante!_ 📊`,
@@ -1475,6 +1944,130 @@ async function resolveNutritionAnswer(text: string, history: AIMessage[]): Promi
   if (nutritionAnswer) return nutritionAnswer;
 
   return findKnowledgeAnswer(text);
+}
+
+async function resolveGenericAssistantResponse(
+  text: string,
+  history: AIMessage[],
+  preClassification: IntentClassification | null,
+  senderName?: string,
+): Promise<string> {
+  const nutritionClarification = getNutritionClarificationPrompt(text);
+  if (nutritionClarification) return nutritionClarification;
+
+  const knowledgeAnswer = await findKnowledgeAnswer(text);
+  if (knowledgeAnswer) return knowledgeAnswer;
+
+  if (isNutritionQuery(text) || looksLikeNutritionMealDescription(text)) {
+    const nutriDirect = await analyzeNutrition(text, history);
+    if (nutriDirect) {
+      await learnFromTurn({
+        text,
+        intent: "nutrition",
+        success: true,
+        classification: preClassification || undefined,
+        channel: "text",
+      });
+      return nutriDirect;
+    }
+  }
+
+  let evolutiveHandled = false;
+  let response = "";
+
+  try {
+    const classification = preClassification ?? (await classifyIntent(text));
+    if (classification.intent !== "unknown" && classification.confidence >= 0.7) {
+      logger.info(
+        `[AI EVOLUTIVO] Intent="${classification.intent}" conf=${classification.confidence.toFixed(2)} src=${classification.source} text="${text.slice(0, 60)}"`,
+      );
+      if (classification.intent === "nutrition" && !shouldPreferFinanceRoute(text)) {
+        const nutri = await analyzeNutrition(text, history);
+        if (nutri) {
+          response = nutri;
+          evolutiveHandled = true;
+          await learnFromTurn({
+            text,
+            intent: "nutrition",
+            success: true,
+            classification,
+            channel: "text",
+          });
+        }
+      } else if (classification.intent === "market") {
+        const marketQuery = detectMarketQuery(text);
+        if (marketQuery) {
+          response = await executeMarketQuery(marketQuery);
+          evolutiveHandled = true;
+          await learnFromTurn({
+            text,
+            intent: "market",
+            success: true,
+            classification,
+            channel: "text",
+          });
+        }
+      } else if (classification.intent === "models" || isModelsCommand(text)) {
+        response = cmdModels(senderName);
+        evolutiveHandled = true;
+      }
+    }
+  } catch (errClassify) {
+    logger.warn(`[AI EVOLUTIVO] Falha na classificação genérica: ${String(errClassify)}`);
+  }
+
+  if (!evolutiveHandled && (isNutritionQuery(text) || looksLikeNutritionMealDescription(text))) {
+    const nutriFallback = await analyzeNutrition(text, history);
+    if (nutriFallback) {
+      return nutriFallback;
+    }
+  }
+
+  if (!evolutiveHandled) {
+    const classifiedIntent = preClassification?.intent ?? "unknown";
+    response =
+      (await generateGeneralResponse(text, history, {
+        intent: classifiedIntent,
+        userName: senderName,
+      })) ??
+      GENERIC_ASSISTANT_FALLBACK;
+  }
+
+  return response;
+}
+
+async function runQueuedWithProgress<T>(
+  phone: string,
+  taskLabel: string,
+  runner: () => Promise<T>,
+  fallback?: () => Promise<T>,
+): Promise<T> {
+  let active = true;
+  let noticesSent = 0;
+  const stopComposing = await startComposingIndicator(phone);
+
+  const intervalRef = setInterval(() => {
+    if (!active || noticesSent >= QUEUE_PROGRESS_MAX_NOTICES) return;
+    noticesSent += 1;
+    sendMessage(
+      phone,
+      `⏳ Ainda processando (${taskLabel})... um instante.`,
+    ).catch((err) => logger.warn(`[Queue] Falha ao enviar aviso de processamento: ${String(err)}`));
+  }, QUEUE_PROGRESS_INTERVAL_MS);
+
+  try {
+    return await runner();
+  } catch (err) {
+    if (fallback) {
+      logger.warn(`[Queue] Fallback direto acionado (${taskLabel}): ${String(err)}`);
+      return fallback();
+    }
+    throw err;
+  } finally {
+    active = false;
+    clearInterval(intervalRef);
+    await stopComposing();
+  }
 }
 
 // ─── Comando: listar contas pendentes ─────────────────────────────────────────
@@ -1708,41 +2301,127 @@ function buildGreetingLine(text: string, senderName?: string): string {
   return `Olá${nameSuffix}! Estou aqui para facilitar sua rotina financeira. 🤝`;
 }
 
+function cmdModels(senderName?: string): string {
+  return buildFullPhraseModelsMessage(senderName);
+}
+
+/** Formata centavos como "R$ 1.799,00" (pt-BR). */
+function formatCentsBRL(cents: number): string {
+  if (!Number.isFinite(cents) || cents <= 0) return "R$ 0,00";
+  return (cents / 100).toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  });
+}
+
+function sourceLabel(slug: string): string {
+  const labels: Record<string, string> = {
+    mercado_livre: "Mercado Livre",
+    buscape: "Buscapé",
+    buscape_api: "Buscapé API",
+    magalu: "Magazine Luiza",
+    kabum: "KaBuM!",
+    pichau: "Pichau",
+    amazon_br: "Amazon BR",
+    casas_bahia: "Casas Bahia",
+  };
+  return labels[slug] || slug;
+}
+
+function formatPriceComparison(summary: ComparisonSummary): string {
+  if (summary.totalOfertas === 0) {
+    const erros = summary.fontesComErro.length
+      ? `\n_Fontes com erro: ${summary.fontesComErro.map(sourceLabel).join(", ")}_`
+      : "";
+    return (
+      `🔍 *Comparador de preços*\n\n` +
+      `Não encontrei ofertas para *"${summary.query}"*. ` +
+      `Tente uma descrição mais específica (marca + modelo + capacidade).` +
+      erros
+    );
+  }
+
+  const lines: string[] = [];
+  lines.push(`🔍 *Comparador de preços*`);
+  lines.push(`_"${summary.query}"_`);
+  lines.push(`━━━━━━━━━━━━━━━━`);
+
+  if (summary.menorOferta) {
+    lines.push(
+      `🟢 *Menor:* ${formatCentsBRL(summary.menorOferta.totalCents)} — ${sourceLabel(summary.menorOferta.fonteSlug)}`,
+    );
+  }
+  lines.push(`⚪ *Médio:* ${formatCentsBRL(summary.precoMedioCents)}`);
+  if (summary.maiorOferta) {
+    lines.push(
+      `🔴 *Maior:* ${formatCentsBRL(summary.maiorOferta.totalCents)} — ${sourceLabel(summary.maiorOferta.fonteSlug)}`,
+    );
+  }
+  lines.push(`━━━━━━━━━━━━━━━━`);
+  lines.push(`🏆 *Top 3 ofertas:*`);
+
+  summary.top3.forEach((offer, idx) => {
+    const titulo = offer.titulo.length > 80 ? `${offer.titulo.slice(0, 77)}...` : offer.titulo;
+    lines.push(
+      `\n${idx + 1}) *${formatCentsBRL(offer.totalCents)}* — ${sourceLabel(offer.fonteSlug)}\n` +
+        `   ${titulo}\n` +
+        `   ${offer.urlProduto}`,
+    );
+  });
+
+  lines.push(`\n━━━━━━━━━━━━━━━━`);
+  lines.push(
+    `_${summary.totalOfertas} oferta(s) em ${summary.fontesConsultadas.length} fonte(s) · ${(summary.latenciaMs / 1000).toFixed(1)}s_`,
+  );
+  if (summary.fontesComErro.length) {
+    lines.push(`_⚠️ Fontes com erro: ${summary.fontesComErro.map(sourceLabel).join(", ")}_`);
+  }
+
+  return lines.join("\n");
+}
+
+async function cmdPriceSearch(canonicalPhone: string, text: string): Promise<string> {
+  const query = extractProductQuery(text);
+  if (query.length < 3) {
+    return (
+      `🔍 *Comparador de preços*\n\n` +
+      `Para comparar, me diga o produto que você quer pesquisar.\n\n` +
+      `Exemplos:\n` +
+      `• _comparar preço da smart tv samsung 50 polegadas_\n` +
+      `• _menor preço iphone 13 128gb_\n` +
+      `• _quanto custa air fryer mondial 4 litros_`
+    );
+  }
+
+  // Rate limit: 10 buscas por hora por telefone.
+  const rl = await checkRateLimit(canonicalPhone, 10, 3600);
+  if (!rl.allowed) {
+    const minutes = Math.ceil(rl.resetInSeconds / 60);
+    return (
+      `⏳ Você atingiu o limite de *10 comparações por hora*.\n\n` +
+      `Tente novamente em ~${minutes} min.`
+    );
+  }
+
+  try {
+    const summary = await comparePrices(query, { whatsappPhone: canonicalPhone });
+    return formatPriceComparison(summary);
+  } catch (err) {
+    logger.error(`[priceSearch] falha na consulta: ${String(err)}`);
+    return (
+      `⚠️ Tive um problema ao consultar as lojas agora. ` +
+      `Pode tentar novamente em alguns instantes?`
+    );
+  }
+}
+
 function cmdHelp(text: string, senderName?: string): string {
   const greetingLine = buildGreetingLine(text, senderName);
 
   return (
     `🤖 *ozapteconta — Assistente Financeiro*\n\n` +
     `${greetingLine}\n\n` +
-    `Abaixo estão *modelos de exemplo* para você copiar e adaptar do seu jeito.\n` +
-    `_Esses comandos são exemplos de como digitar para obter as informações._\n\n` +
-    `📝 *Modelos para registrar conta:*\n` +
-    `   • _luz 150 dia 20_\n` +
-    `   • _aluguel 1200 vence dia 5_\n` +
-    `   • _recebi 500 de salário_\n` +
-    `   • _cartão 350 vence amanhã_\n\n` +
-    `📋 *Modelos para consultar:*\n` +
-    `   • _ver contas_ — pendentes do mês\n` +
-    `   • _contas pagas_ — histórico\n` +
-    `   • _resumo_ — visão geral\n` +
-    `   • _gerar pdf agora_ — relatório diário em PDF\n\n` +
-    `📧 *Modelo para enviar por e-mail:*\n` +
-    `   • _enviar pdf do resumo para email nome@dominio.com_\n` +
-    `   • _leva alguns segundos para juntar os dados e enviar_\n\n` +
-    `✅ *Modelo para marcar como pago:*\n` +
-    `   • _paguei #123_\n\n` +
-    `💹 *Modelos de mercado financeiro:*\n` +
-    `   • _dólar hoje_ / _bitcoin_ / _selic_\n` +
-    `   • _PETR4_ / _VALE3_ / _IBOVESPA_\n` +
-    `   • _mercado hoje_ — resumo completo\n\n` +
-    `🚗 *Modelos para Tabela FIPE:*\n` +
-    `   • _fipe volkswagen gol 2020_ / _fipe honda civic 2019_\n` +
-    `   • _fipe moto honda cg 160 2022_\n` +
-    `   • _fipe toyota corolla xei 2021_\n` +
-    `   • Digite _fipe_ para ver mais exemplos\n\n` +
-    `🎤 *Áudio:* Pode enviar mensagens de voz!\n\n` +
-    `_Dica: Você pode escrever como fala no dia a dia. Eu entendo linguagem natural. 😊_\n\n` +
-    `📈`
+    buildHelpPhraseModelsPreview()
   );
 }
 
@@ -1774,16 +2453,104 @@ async function scheduleReminders(phone: string, transactionId: number, venciment
   }
 }
 
+// ─── Assistente de viagens (texto ou áudio) ───────────────────────────────────
+async function handleFlightAssistantRoute(
+  canonicalPhone: string,
+  text: string,
+  history: AIMessage[],
+  canSearchFlights: boolean,
+  options?: { messagePrefix?: string; userContextContent?: string },
+): Promise<boolean> {
+  const flightWizardActive = Boolean(await loadFlightWizard(canonicalPhone));
+  const flightIntent =
+    flightWizardActive ||
+    isTravelRelatedQuery(text) ||
+    Boolean(detectFlightQuery(text));
+  if (!flightIntent) return false;
+
+  const prefix = options?.messagePrefix || "";
+  const userContent = options?.userContextContent || text;
+
+  if (!canSearchFlights) {
+    await sendMessage(
+      canonicalPhone,
+      prefix + (await buildTravelPlanBlockMessage(() => formatPlanPrice("TRAVEL", "59,90"))),
+    );
+    return true;
+  }
+
+  const flightTurn = await handleFlightAssistantTurn(canonicalPhone, text);
+
+  if (flightTurn.kind === "reply") {
+    const message = prefix + flightTurn.message;
+    await saveContext(canonicalPhone, [
+      ...history,
+      { role: "user", content: userContent },
+      { role: "assistant", content: message },
+    ]);
+    await sendMessage(canonicalPhone, message);
+    return true;
+  }
+
+  if (flightTurn.kind === "search") {
+    const flightLimit = await checkFlightSearchAllowed(canonicalPhone);
+    if (!flightLimit.allowed) {
+      await sendMessage(canonicalPhone, prefix + flightLimit.message);
+      return true;
+    }
+
+    await sendMessage(canonicalPhone, prefix + buildFlightSearchIntro(flightTurn.query));
+
+    const flightResult = await runQueuedWithProgress<FlightSearchResult>(
+      canonicalPhone,
+      "busca de voos",
+      async () => enqueueAndWait(QUEUE_NAMES.FLIGHTS, {
+        phone: canonicalPhone,
+        flightQuery: flightTurn.query,
+      }, {
+        dedupKey: `flight_${canonicalPhone}_${flightTurn.query.originCode}_${flightTurn.query.destinationCode}_${flightTurn.query.outboundDate}`.slice(0, 180),
+        timeoutMs: 150000,
+      }) as Promise<FlightSearchResult>,
+      async () => runFlightSearchWithRateLimit(canonicalPhone, flightTurn.query),
+    );
+
+    const resultMessage = prefix ? `${prefix}${flightResult.message}` : flightResult.message;
+    await saveContext(canonicalPhone, [
+      ...history,
+      { role: "user", content: userContent },
+      { role: "assistant", content: resultMessage },
+    ]);
+    await sendMessage(canonicalPhone, resultMessage);
+    return true;
+  }
+
+  return false;
+}
+
 // ─── Processar mensagem de texto ──────────────────────────────────────────────
 export async function processText(phone: string, senderName: string | undefined, text: string) {
   const identity = await resolveWhatsappIdentity(phone);
   const canonicalPhone = identity.canonicalPhone || phone;
   const user = await getOrCreateUser(canonicalPhone, senderName, identity.aliases);
 
+  let intentClassification: IntentClassification | null = null;
+  try {
+    intentClassification = await classifyIntent(text);
+    logger.info(
+      `[AI EVOLUTIVO] Pré-classificação intent=${intentClassification.intent} conf=${intentClassification.confidence.toFixed(2)} src=${intentClassification.source}`,
+    );
+  } catch (errPre) {
+    logger.warn(`[AI EVOLUTIVO] Pré-classificação falhou: ${String(errPre)}`);
+  }
+
   // Gate 1: cadastro completo + Gate 2: plano ativo
-  const intercepted = await handleOnboarding(user, canonicalPhone, text, identity.aliases);
+  const intercepted = await handleOnboarding(user, canonicalPhone, text, identity.aliases, senderName);
   if (intercepted) return;
 
+  // Log de interação para analytics (fire-and-forget)
+  if (intentClassification?.intent) {
+    logClientInteraction(canonicalPhone, intentClassification.intent, "text").catch(() => {});
+  }
 
   // Gate 3: resposta a método de pagamento pendente
   if (user.registrationStep === "pending_payment_method") {
@@ -1816,12 +2583,30 @@ export async function processText(phone: string, senderName: string | undefined,
     where: { phone: canonicalPhone },
     select: { plan: true },
   });
-  const isBasicPlan = clientProfile?.plan !== "FULL";
+  const clientPlan = clientProfile?.plan ?? "HOME";
+  const lacksFullFeatures = !hasFullFeatures(clientPlan);
+  const canSearchFlights = hasFlightSearch(clientPlan);
 
   let response = "";
 
   if (command === "help") {
     response = cmdHelp(text, senderName);
+  } else if (command === "models") {
+    response = cmdModels(senderName);
+  } else if (command === "price_search") {
+    await sendMessage(
+      canonicalPhone,
+      "🔍 Comparando preços nas lojas. Isso leva alguns segundos...",
+    );
+    response = await cmdPriceSearch(canonicalPhone, text);
+    await learnFromTurn({
+      text,
+      intent: "priceSearch",
+      success: !response.startsWith("⚠️") && !response.includes("Não encontrei"),
+      classification: intentClassification || undefined,
+      channel: "text",
+      notes: "Consulta ao comparador de preços",
+    });
   } else if (command === "list_pending") {
     response = await cmdListPending(canonicalPhone);
   } else if (command === "list_paid") {
@@ -1831,24 +2616,7 @@ export async function processText(phone: string, senderName: string | undefined,
   } else if (command === "summary") {
     response = await cmdSummary(canonicalPhone);
   } else if (command === "report_email") {
-    const email = extractEmailFromText(text);
-
-    if (!email) {
-      response =
-        "📧 Para enviar o resumo por e-mail, preciso do endereço completo.\n\n" +
-        "Exemplos corretos:\n" +
-        "• *enviar pdf do resumo para email nome@dominio.com*\n" +
-        "• *quero o relatório no e-mail financeiro@empresa.com.br*\n\n" +
-        "_Leva alguns segundos para juntar os dados e concluir o envio._";
-    } else {
-      await sendMessage(
-        canonicalPhone,
-        `📨 Recebi seu pedido. Estou preparando seu resumo em PDF para o e-mail ${email}. ` +
-          "Aguarde mais alguns instantes enquanto junto os dados.",
-      );
-      const reportResult = await sendFinancialReportNow(canonicalPhone, email);
-      response = reportResult.message;
-    }
+    response = await executeReportEmailFlow(canonicalPhone, text);
   } else if (command === "report_now") {
     await sendMessage(
       canonicalPhone,
@@ -1857,13 +2625,25 @@ export async function processText(phone: string, senderName: string | undefined,
     const reportResult = await sendFinancialReportNow(canonicalPhone);
     response = reportResult.message;
   } else if (command === "market_help") {
-    response = isBasicPlan
+    response = lacksFullFeatures
       ? "🔒 Recurso disponível apenas no plano *Completo (R$ 9,90)*.\n\nNo plano básico você pode usar contas a pagar e a receber normalmente."
       : getMarketHelp();
   } else if (command === "fipe_help") {
-    response = isBasicPlan
+    response = lacksFullFeatures
       ? "🔒 Consulta FIPE disponível apenas no plano *Completo (R$ 9,90)*.\n\nNo plano básico você pode usar contas a pagar e a receber normalmente."
       : getFipeHelp();
+  } else if (command === "fipezap_help") {
+    response = lacksFullFeatures
+      ? "🔒 Consulta FipeZap disponível apenas no plano *Completo (R$ 9,90)*."
+      : getFipeZapHelp();
+  } else if (command === "macro_help") {
+    response = lacksFullFeatures
+      ? "🔒 Indicadores macro disponíveis apenas no plano *Completo (R$ 9,90)*."
+      : getMacroHelp();
+  } else if (command === "flight_help") {
+    response = canSearchFlights
+      ? getFlightHelp()
+      : await buildTravelPlanBlockMessage(() => formatPlanPrice("TRAVEL", "59,90"));
   } else {
     // ── Calculadora de Metabolismo/IMC (prioridade máxima — antes do menu) ──────
     if (isBMRQuery(text) || isChoosingBMRFromMenu(text, history) || isBMRFollowUp(text, history)) {
@@ -1920,8 +2700,19 @@ export async function processText(phone: string, senderName: string | undefined,
     if (isNutritionQuery(text)) {
       await sendLoadingMessage(canonicalPhone, "nutrition_ai");
       response =
-        (await resolveNutritionAnswer(text, history)) ??
-        "🥗 Posso analisar alimentos, calorias e macros, mas preciso que você diga o alimento e, se possível, a quantidade.\n\nExemplo: *2 ovos, arroz, feijão e bife no almoço*";
+        (await runQueuedWithProgress<string | null>(
+          canonicalPhone,
+          "análise nutricional",
+          async () => enqueueAndWait(QUEUE_NAMES.NUTRITION, {
+            text,
+            history,
+          }, {
+            dedupKey: `nutrition_${canonicalPhone}_${text}`.replace(/[^\w.-]+/g, "_").slice(0, 180),
+            timeoutMs: 90000,
+          }) as Promise<string | null>,
+          async () => resolveNutritionAnswer(text, history),
+        )) ??
+        "🥗 Entendi sua refeição! Estou recalculando com nossa IA avançada — se a resposta vier incompleta, envie de novo em uma linha.\n\nExemplo: *5 ovos, 2 bananas, aveia, mel e café*";
 
       await saveContext(canonicalPhone, [
         ...history,
@@ -1929,7 +2720,11 @@ export async function processText(phone: string, senderName: string | undefined,
         { role: "assistant", content: response },
       ]);
 
-      await sendMessage(canonicalPhone, response);
+      if (isCalorieMacroAnalysisResponse(response)) {
+        await sendNutritionWithMealImage(canonicalPhone, response);
+      } else {
+        await sendMessage(canonicalPhone, response);
+      }
       return;
     }
 
@@ -1945,25 +2740,85 @@ export async function processText(phone: string, senderName: string | undefined,
       return;
     }
 
+    const handledFlight = await handleFlightAssistantRoute(
+      canonicalPhone,
+      text,
+      history,
+      canSearchFlights,
+    );
+    if (handledFlight) return;
+
     // ── Consulta FIPE (antes da IA) ───────────────────────────────────────────
     const fipeQuery = detectFipeQuery(text);
     if (fipeQuery) {
-      if (isBasicPlan) {
+      if (lacksFullFeatures) {
         await sendMessage(
           canonicalPhone,
           "🔒 A consulta FIPE é um recurso do plano *Completo (R$ 9,90)*.\n\nSeu plano atual continua com contas a pagar/receber para PF e PJ.",
         );
         return;
       }
-      const fipeResult = await queryFipe(canonicalPhone, fipeQuery.query, fipeQuery.vehicleType);
-      await sendMessage(canonicalPhone, fipeResult.message);
+      const limitPreview = await checkFipeSearchAllowed(canonicalPhone, fipeQuery.vehicleType);
+      if (!limitPreview.allowed) {
+        await sendMessage(canonicalPhone, limitPreview.message);
+        return;
+      }
+
+      const fipeResult = await runQueuedWithProgress<FipeQueryResult>(
+        canonicalPhone,
+        "consulta FIPE",
+        async () => enqueueAndWait(QUEUE_NAMES.FIPE, {
+          phone: canonicalPhone,
+          rawQuery: fipeQuery.query,
+          vehicleType: fipeQuery.vehicleType,
+        }, {
+          dedupKey: `fipe_${canonicalPhone}_${fipeQuery.vehicleType}_${fipeQuery.query}`.replace(/[^\w.-]+/g, "_").slice(0, 180),
+          timeoutMs: 90000,
+        }) as Promise<FipeQueryResult>,
+        async () => runFipeQueryWithRateLimit(canonicalPhone, fipeQuery.query, fipeQuery.vehicleType),
+      );
+      await sendFipeWithSilhouette(canonicalPhone, fipeResult);
+      return;
+    }
+
+    // ── Consulta FipeZap (imóveis) ────────────────────────────────────────────
+    const fipeZapQuery = detectFipeZapQuery(text);
+    if (fipeZapQuery) {
+      if (lacksFullFeatures) {
+        await sendMessage(
+          canonicalPhone,
+          "🔒 A consulta FipeZap é um recurso do plano *Completo (R$ 9,90)*.",
+        );
+        return;
+      }
+      const fipeZapLimit = await checkFipeZapSearchAllowed(canonicalPhone);
+      if (!fipeZapLimit.allowed) {
+        await sendMessage(canonicalPhone, fipeZapLimit.message);
+        return;
+      }
+
+      await sendLoadingMessage(canonicalPhone, "fipezap_data");
+      const fipeZapResult = await runQueuedWithProgress<FipeZapResult>(
+        canonicalPhone,
+        "consulta FipeZap",
+        async () => enqueueAndWait(QUEUE_NAMES.FIPEZAP, {
+          phone: canonicalPhone,
+          rawQuery: text,
+          fipeZapQuery,
+        }, {
+          dedupKey: `fipezap_${canonicalPhone}_${fipeZapQuery.scope}_${fipeZapQuery.citySlug ?? "br"}_${fipeZapQuery.segment}`.replace(/[^\w.-]+/g, "_").slice(0, 180),
+          timeoutMs: 60000,
+        }) as Promise<FipeZapResult>,
+        async () => runFipeZapQueryWithRateLimit(canonicalPhone, text, fipeZapQuery),
+      );
+      await sendMessage(canonicalPhone, fipeZapResult.message);
       return;
     }
 
     // ── Análise de Investimentos (IA + dados reais) ───────────────────────────
     const investQuery = detectInvestmentQuery(text);
     if (investQuery) {
-      if (isBasicPlan) {
+      if (lacksFullFeatures) {
         await sendMessage(
           canonicalPhone,
           "🔒 Análise de Investimentos é um recurso do plano *Completo (R$ 9,90)*.\n\nAtualize seu plano para acessar análises de ações, criptomoedas e sugestões de investimento.",
@@ -2026,7 +2881,7 @@ export async function processText(phone: string, senderName: string | undefined,
     // ── Consulta de mercado financeiro (antes da IA) ──────────────────────────
     const marketQuery = detectMarketQuery(text);
     if (marketQuery) {
-      if (isBasicPlan) {
+      if (lacksFullFeatures) {
         await sendMessage(
           canonicalPhone,
           "🔒 Mercado Financeiro é um recurso do plano *Completo (R$ 9,90)*.\n\nSeu plano atual continua com contas a pagar/receber para PF e PJ.",
@@ -2034,20 +2889,65 @@ export async function processText(phone: string, senderName: string | undefined,
         return;
       }
       // Cotações e resumo de mercado precisam buscar dados externos
-      if (marketQuery.type !== "help_market") {
+      if (marketQuery.type !== "help_market" && marketQuery.type !== "macro_help") {
         await sendLoadingMessage(canonicalPhone, "market_data");
       }
-      response = await executeMarketQuery(marketQuery);
+      response = await runQueuedWithProgress<string>(
+        canonicalPhone,
+        "consulta de mercado",
+        async () => enqueueAndWait(QUEUE_NAMES.MARKET, {
+          query: marketQuery,
+        }, {
+          dedupKey: `market:${canonicalPhone}:${JSON.stringify(marketQuery)}`,
+          timeoutMs: 90000,
+        }) as Promise<string>,
+        async () => executeMarketQuery(marketQuery),
+      );
       await sendMessage(canonicalPhone, response);
       return;
     }
+
+    if (shouldSkipFinanceExtraction(text)) {
+      await sendLoadingMessage(
+        canonicalPhone,
+        isNutritionQuery(text) || looksLikeNutritionMealDescription(text) ? "nutrition_ai" : "general_ai",
+      );
+      response = await resolveGenericAssistantResponse(text, history, intentClassification, senderName);
+
+      await saveContext(canonicalPhone, [
+        ...history,
+        { role: "user", content: text },
+        { role: "assistant", content: response },
+      ]);
+
+      if (isCalorieMacroAnalysisResponse(response)) {
+        await sendNutritionWithMealImage(canonicalPhone, response);
+      } else {
+        await sendMessage(canonicalPhone, response);
+      }
+      return;
+    }
+
     // Extração via IA tem prioridade — determina contextos permitidos pelo plano
     const allowedContexts: ("PESSOAL" | "COMERCIAL")[] =
       clientProfile?.plan === "OFFICE" ? ["PESSOAL", "COMERCIAL"] : ["PESSOAL", "COMERCIAL"];
 
     await sendLoadingMessage(canonicalPhone, pickFinanceLoadingType(text));
 
-    const extracted = await extractTransaction(text, history, allowedContexts, "text");
+    const extracted = await runQueuedWithProgress(
+      canonicalPhone,
+      "registro de gastos",
+      async () => enqueueAndWait(QUEUE_NAMES.EXPENSES, {
+        text,
+        history,
+        allowedContexts,
+        source: "text",
+      }, {
+        dedupKey: `expense:${canonicalPhone}:${text}`,
+        timeoutMs: 90000,
+      }) as Promise<Awaited<ReturnType<typeof extractTransaction>>>,
+      async () => extractTransaction(text, history, allowedContexts, "text"),
+    );
 
     if (!extracted.needsMoreInfo && extracted.valor !== null && extracted.valor > 0) {
       // Transação identificada — salva imediatamente
@@ -2102,6 +3002,15 @@ export async function processText(phone: string, senderName: string | undefined,
         vencLine +
         `\n🆔 ID: *#${created.id}*\n\n` +
         `Se quiser conferir agora, pode mandar *resumo* ou *ver contas*.`;
+
+      await learnFromTurn({
+        text,
+        intent: "finance",
+        success: true,
+        classification: intentClassification || undefined,
+        channel: "text",
+        notes: "Transação financeira registrada com sucesso.",
+      });
     } else {
       // Sem transação — tenta base de conhecimento antes de responder com a IA
       const nutritionClarification = getNutritionClarificationPrompt(text);
@@ -2112,20 +3021,118 @@ export async function processText(phone: string, senderName: string | undefined,
         if (knowledgeAnswer) {
           response = knowledgeAnswer;
         } else {
-          // IA generalista — responde qualquer pergunta contextualmente
-          await sendLoadingMessage(canonicalPhone, "general_ai");
-          response =
-            (await generateGeneralResponse(text, history)) ??
-            `❓ Não entendi o que você quer fazer.\n\n` +
-            `Posso te ajudar com:\n` +
-            `• 💰 Registrar contas a pagar ou receber\n` +
-            `• 📊 Ver seu resumo financeiro\n` +
-            `• 🥗 Calorias e informações de alimentos\n` +
-            `• 🧮 Calcular IMC ou taxa basal\n\n` +
-            `Exemplos:\n` +
-            `_"Paguei 150 reais de mercado"_\n` +
-            `_"Quantas calorias tem frango?"_\n` +
-            `_"Calcule meu IMC, sou mulher 65kg 1,62m 28 anos"_`;
+          // ── Classificação evolutiva: antes de cair no genérico, consulta lições ──
+          let evolutiveHandled = false;
+          try {
+            const classification = await classifyIntent(text);
+            if (classification.intent !== "unknown" && classification.confidence >= 0.7) {
+              logger.info(
+                `[AI EVOLUTIVO] Intent="${classification.intent}" conf=${classification.confidence.toFixed(2)} src=${classification.source} text="${text.slice(0, 60)}"`,
+              );
+              if (classification.intent === "nutrition" && !shouldPreferFinanceRoute(text)) {
+                await sendLoadingMessage(canonicalPhone, "nutrition_ai");
+                const nutri = await analyzeNutrition(text, history);
+                if (nutri) {
+                  response = nutri;
+                  evolutiveHandled = true;
+                  await learnFromTurn({
+                    text,
+                    intent: "nutrition",
+                    success: true,
+                    classification,
+                    channel: "text",
+                  });
+                }
+              } else if (classification.intent === "market") {
+                const marketQuery = detectMarketQuery(text);
+                if (marketQuery) {
+                  response = await executeMarketQuery(marketQuery);
+                  evolutiveHandled = true;
+                  await learnFromTurn({
+                    text,
+                    intent: "market",
+                    success: true,
+                    classification,
+                    channel: "text",
+                  });
+                }
+              } else if (classification.intent === "fipezap") {
+                const fipeZapDetected = detectFipeZapQuery(text);
+                if (fipeZapDetected) {
+                  const fipeZapRes = await runFipeZapQueryWithRateLimit(
+                    canonicalPhone,
+                    text,
+                    fipeZapDetected,
+                  );
+                  if (fipeZapRes?.message) {
+                    response = fipeZapRes.message;
+                    evolutiveHandled = true;
+                    await learnFromTurn({
+                      text,
+                      intent: "fipezap",
+                      success: fipeZapRes.success,
+                      classification,
+                      channel: "text",
+                    });
+                  }
+                }
+              } else if (classification.intent === "fipe") {
+                const fipeQuery = detectFipeQuery(text);
+                if (fipeQuery) {
+                  const fipeRes = await runFipeQueryWithRateLimit(
+                    canonicalPhone,
+                    fipeQuery.query,
+                    fipeQuery.vehicleType,
+                  );
+                  if (fipeRes && fipeRes.message) {
+                    /* Envia já com silhueta (se aplicável) e curto-circuita o
+                     * envio genérico abaixo para evitar duplicar a mensagem. */
+                    await sendFipeWithSilhouette(canonicalPhone, fipeRes);
+                    await saveContext(canonicalPhone, [
+                      ...history,
+                      { role: "user", content: text },
+                      { role: "assistant", content: fipeRes.message },
+                    ]);
+                    await learnFromTurn({
+                      text,
+                      intent: "fipe",
+                      success: true,
+                      classification,
+                      channel: "text",
+                    });
+                    return;
+                  }
+                }
+              } else if (classification.intent === "models" || isModelsCommand(text)) {
+                response = cmdModels(senderName);
+                evolutiveHandled = true;
+              } else if (classification.intent === "report" || detectReportCommand(text) === "report_email") {
+                response = await executeReportEmailFlow(canonicalPhone, text);
+                evolutiveHandled = true;
+              }
+            }
+          } catch (errClassify) {
+            logger.warn(`[AI EVOLUTIVO] Falha na classificação: ${String(errClassify)}`);
+          }
+
+  if (!evolutiveHandled && (isNutritionQuery(text) || looksLikeNutritionMealDescription(text) || looksLikeNutritionMealList(text))) {
+    await sendLoadingMessage(canonicalPhone, "nutrition_ai");
+    const nutriFallback = await analyzeNutrition(text, history);
+            if (nutriFallback) {
+              response = nutriFallback;
+              evolutiveHandled = true;
+            }
+          }
+
+          if (!evolutiveHandled) {
+            await sendLoadingMessage(canonicalPhone, "general_ai");
+            response =
+              (await generateGeneralResponse(text, history, {
+                intent: intentClassification?.intent ?? "unknown",
+                userName: senderName,
+              })) ??
+              GENERIC_ASSISTANT_FALLBACK;
+          }
         }
       }
     }
@@ -2138,7 +3145,11 @@ export async function processText(phone: string, senderName: string | undefined,
     { role: "assistant", content: response },
   ]);
 
-  await sendMessage(canonicalPhone, response);
+  if (isCalorieMacroAnalysisResponse(response)) {
+    await sendNutritionWithMealImage(canonicalPhone, response);
+  } else {
+    await sendMessage(canonicalPhone, response);
+  }
 }
 
 // ─── Processar áudio a partir de buffer (QR-paired / Baileys) ────────────────
@@ -2151,123 +3162,392 @@ export async function processAudioBuffer(
 ) {
   const identity = await resolveWhatsappIdentity(phone);
   const canonicalPhone = identity.canonicalPhone || phone;
-  const user = await getOrCreateUser(canonicalPhone, senderName, identity.aliases);
-  const intercepted = await handleOnboarding(user, canonicalPhone, "[áudio]", identity.aliases);
-  if (intercepted) return;
 
-  const audioDir = config.storage.audioPath;
-  if (!fs.existsSync(audioDir)) fs.mkdirSync(audioDir, { recursive: true });
+  return withAudioPhoneLock(canonicalPhone, async () => {
+    if (!claimAudioProcessing(canonicalPhone, mediaId)) return;
 
-  const ext = mimeType.includes("mp4") ? "mp4" : "ogg";
-  const filename = `${canonicalPhone}_${Date.now()}_${mediaId}.${ext}`;
-  const audioPath = path.join(audioDir, filename);
-  fs.writeFileSync(audioPath, audioBuffer);
+    const user = await getOrCreateUser(canonicalPhone, senderName, identity.aliases);
+    const intercepted = await handleOnboarding(user, canonicalPhone, "[áudio]", identity.aliases, senderName);
+    if (intercepted) return;
 
-  const audioRecord = await prisma.audioMessage.create({
+    logClientInteraction(canonicalPhone, "audio_message", "audio").catch(() => {});
+
+    const stopComposing = await startComposingIndicator(canonicalPhone);
+    const pendingNotice = scheduleAudioPendingNotice(canonicalPhone);
+
+    try {
+      const audioDir = config.storage.audioPath;
+      if (!fs.existsSync(audioDir)) fs.mkdirSync(audioDir, { recursive: true });
+
+      const ext = mimeType.includes("mp4") ? "mp4" : "ogg";
+      const filename = `${canonicalPhone}_${Date.now()}_${mediaId}.${ext}`;
+      const audioPath = path.join(audioDir, filename);
+      fs.writeFileSync(audioPath, audioBuffer);
+
+      const audioRecord = await prisma.audioMessage.create({
+        data: {
+          userPhone: canonicalPhone,
+          storageKey: filename,
+          storageUrl: `/storage/audios/${filename}`,
+          mimeType,
+          whatsappMediaId: mediaId,
+        },
+      });
+
+      const freshUser = await prisma.whatsappUser.findUnique({
+        where: { phone: canonicalPhone },
+        select: { conversationContext: true },
+      });
+      const history = parseContext(freshUser?.conversationContext);
+      const cp = await prisma.clientProfile.findUnique({
+        where: { phone: canonicalPhone },
+        select: { plan: true },
+      });
+      const allowedContexts: ("PESSOAL" | "COMERCIAL")[] =
+        cp?.plan === "OFFICE" ? ["PESSOAL", "COMERCIAL"] : ["PESSOAL", "COMERCIAL"];
+
+      let transcription = (await transcribeAudio(audioPath))?.trim() || null;
+      if (!transcription) {
+        const fromExtract = await extractTransactionFromAudio(audioPath, history, allowedContexts);
+        transcription = fromExtract?.transcription?.trim() || null;
+      }
+
+      if (!transcription) {
+        await sendMessage(
+          canonicalPhone,
+          "⚠️ Não consegui entender o áudio. Pode reenviar ou mandar em texto simples?",
+        );
+        return;
+      }
+
+      if (isLikelyUnclearTranscript(transcription)) {
+        pendingNotice.cancel();
+        await sendMessage(canonicalPhone, buildUnclearAudioPrompt(["finanças", "nutrição"]));
+        return;
+      }
+
+      logger.info(`[Audio] Transcrição: "${transcription}"`);
+      await appendUserContextEarly(canonicalPhone, `[áudio] ${transcription}`);
+      await prisma.audioMessage.update({ where: { id: audioRecord.id }, data: { transcription } });
+
+      let audioClassification: IntentClassification | null = null;
+      try {
+        audioClassification = await classifyIntent(transcription);
+        logger.info(
+          `[Audio] Rota intent=${audioClassification.intent} conf=${audioClassification.confidence.toFixed(2)}`,
+        );
+      } catch (errAudioClass) {
+        logger.warn(`[AI EVOLUTIVO] Classificação áudio falhou: ${String(errAudioClass)}`);
+      }
+
+      if (isModelsCommand(transcription)) {
+        pendingNotice.cancel();
+        await sendMessage(canonicalPhone, cmdModels(senderName));
+        return;
+      }
+
+      const reportCmd = detectReportCommand(transcription);
+      if (reportCmd === "report_email") {
+        pendingNotice.cancel();
+        const reportResponse = await executeReportEmailFlow(canonicalPhone, transcription, {
+          audioPrefix: true,
+        });
+        await saveContext(canonicalPhone, [
+          ...history,
+          { role: "user", content: `[áudio] ${transcription}` },
+          { role: "assistant", content: reportResponse },
+        ]);
+        await sendMessage(canonicalPhone, reportResponse);
+        return;
+      }
+      if (reportCmd === "report_now") {
+        pendingNotice.cancel();
+        await sendMessage(
+          canonicalPhone,
+          `🎤 _"${transcription}"_\n\n📄 Estou gerando seu relatório em PDF. Aguarde alguns instantes.`,
+        );
+        const reportResult = await sendFinancialReportNow(canonicalPhone);
+        await sendMessage(canonicalPhone, reportResult.message);
+        return;
+      }
+
+      if (
+        isPriceSearchQuery(transcription) ||
+        audioClassification?.intent === "priceSearch"
+      ) {
+        pendingNotice.cancel();
+        await sendMessage(
+          canonicalPhone,
+          `🎤 _"${transcription}"_\n\n🔍 Comparando preços nas lojas...`,
+        );
+        const priceResponse = await cmdPriceSearch(canonicalPhone, transcription);
+        await learnFromTurn({
+          text: transcription,
+          intent: "priceSearch",
+          success: !priceResponse.startsWith("⚠️") && !priceResponse.includes("Não encontrei"),
+          classification: audioClassification || undefined,
+          channel: "audio",
+          notes: "Consulta ao comparador de preços via áudio",
+        });
+        await saveContext(canonicalPhone, [
+          ...history,
+          { role: "user", content: `[áudio] ${transcription}` },
+          { role: "assistant", content: priceResponse },
+        ]);
+        await sendMessage(canonicalPhone, priceResponse);
+        return;
+      }
+
+      const audioCanSearchFlights = hasFlightSearch(cp?.plan ?? "HOME");
+      const flightHandled = await handleFlightAssistantRoute(
+        canonicalPhone,
+        transcription,
+        history,
+        audioCanSearchFlights,
+        {
+          messagePrefix: `🎤 _"${transcription}"_\n\n`,
+          userContextContent: `[áudio] ${transcription}`,
+        },
+      );
+      if (flightHandled) {
+        pendingNotice.cancel();
+        return;
+      }
+
+      if (isBMRQuery(transcription) || isChoosingBMRFromMenu(transcription, history) || isBMRFollowUp(transcription, history)) {
+        const response = `🎤 _"${transcription}"_\n\n${formatBMRResponse(transcription)}`;
+        await saveContext(canonicalPhone, [
+          ...history,
+          { role: "user", content: `[áudio] ${transcription}` },
+          { role: "assistant", content: response },
+        ]);
+        await sendMessage(canonicalPhone, response);
+        return;
+      }
+
+      const financeRoute =
+        !detectReportCommand(transcription) &&
+        audioClassification?.intent !== "report" &&
+        (shouldPreferFinanceRoute(transcription) ||
+          (audioClassification?.intent === "finance" && (audioClassification.confidence ?? 0) >= 0.65));
+
+      const nutritionRoute =
+        !financeRoute &&
+        (isNutritionAdviceQuery(transcription) ||
+          isNutritionQuery(transcription) ||
+          audioClassification?.intent === "nutrition");
+
+      if (financeRoute) {
+        const extracted = await runQueuedWithProgress(
+          canonicalPhone,
+          "registro de gastos",
+          async () =>
+            enqueueAndWait(
+              QUEUE_NAMES.EXPENSES,
+              { text: transcription, history, allowedContexts, source: "audio" },
+              {
+                dedupKey: `expense:${canonicalPhone}:${normalizeForAudioDedup(transcription)}`,
+                timeoutMs: 90000,
+              },
+            ) as Promise<Awaited<ReturnType<typeof extractTransaction>>>,
+          async () => extractTransaction(transcription, history, allowedContexts, "audio"),
+        );
+
+        if (!extracted.needsMoreInfo && extracted.valor !== null && extracted.valor > 0) {
+          const response = await persistAudioFinanceTransaction(
+            canonicalPhone,
+            extracted,
+            transcription,
+            filename,
+            audioRecord.id,
+            history,
+          );
+          await learnFromTurn({
+            text: transcription,
+            intent: "finance",
+            success: true,
+            classification: audioClassification || undefined,
+            channel: "audio",
+          });
+          await sendMessage(canonicalPhone, response);
+          return;
+        }
+      }
+
+      if (nutritionRoute) {
+        await handleAudioNutritionRoute(
+          canonicalPhone,
+          transcription,
+          history,
+          audioClassification,
+        );
+        return;
+      }
+
+      const extractedFallback = await runQueuedWithProgress(
+        canonicalPhone,
+        "registro de gastos",
+        async () => extractTransaction(transcription, history, allowedContexts, "audio"),
+      );
+
+      let response: string;
+      if (!extractedFallback.needsMoreInfo && extractedFallback.valor !== null && extractedFallback.valor > 0) {
+        response = await persistAudioFinanceTransaction(
+          canonicalPhone,
+          extractedFallback,
+          transcription,
+          filename,
+          audioRecord.id,
+          history,
+        );
+        await learnFromTurn({
+          text: transcription,
+          intent: "finance",
+          success: true,
+          classification: audioClassification || undefined,
+          channel: "audio",
+        });
+      } else if (detectReportCommand(transcription) === "report_email") {
+        response = await executeReportEmailFlow(canonicalPhone, transcription, { audioPrefix: true });
+      } else {
+        const nutritionClarification = getNutritionClarificationPrompt(transcription);
+        response = nutritionClarification
+          ? `🎤 _"${transcription}"_\n\n${nutritionClarification}`
+          : `🎤 _"${transcription}"_\n\n${extractedFallback.responseMessage}`;
+      }
+
+      await saveContext(canonicalPhone, [
+        ...history,
+        { role: "user", content: `[áudio] ${transcription}` },
+        { role: "assistant", content: response },
+      ]);
+      await sendMessage(canonicalPhone, response);
+    } finally {
+      pendingNotice.cancel();
+      await stopComposing();
+    }
+  });
+}
+
+function normalizeForAudioDedup(text: string): string {
+  return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+async function persistAudioFinanceTransaction(
+  canonicalPhone: string,
+  extracted: Awaited<ReturnType<typeof extractTransaction>>,
+  transcription: string,
+  filename: string,
+  audioRecordId: number,
+  history: AIMessage[],
+): Promise<string> {
+  const now = new Date();
+  const vencimentoDate = extracted.vencimento ? new Date(extracted.vencimento + "T12:00:00Z") : null;
+  const created = await prisma.financialTransaction.create({
     data: {
       userPhone: canonicalPhone,
-      storageKey: filename,
-      storageUrl: `/storage/audios/${filename}`,
-      mimeType,
-      whatsappMediaId: mediaId,
+      tipo: extracted.tipo,
+      valor: extracted.valor!,
+      natureza: extracted.natureza,
+      context: extracted.contexto,
+      categoria: extracted.categoria,
+      ...(extracted.categoryId ? { categoryId: extracted.categoryId } : {}),
+      vencimento: vencimentoDate,
+      status: "PENDENTE",
+      fonte: "VOZ",
+      rawMessage: transcription,
+      audioStorageKey: filename,
+      audioTranscription: transcription,
+      extractedConfidence: extracted.confidence,
+      needsHumanReview: extracted.confidence < 0.7,
     },
   });
-  const pendingNotice = scheduleAudioPendingNotice(canonicalPhone);
 
+  await prisma.audioMessage.update({ where: { id: audioRecordId }, data: { transactionId: created.id } });
+  if (vencimentoDate) await scheduleReminders(canonicalPhone, created.id, vencimentoDate);
+  await prisma.whatsappUser.update({
+    where: { phone: canonicalPhone },
+    data: { totalTransactions: { increment: 1 } },
+  });
 
-  const history = parseContext(user.conversationContext);
-  const cp = await prisma.clientProfile.findUnique({ where: { phone: canonicalPhone }, select: { plan: true } });
-  const allowedContexts: ("PESSOAL" | "COMERCIAL")[] =
-    cp?.plan === "OFFICE" ? ["PESSOAL", "COMERCIAL"] : ["PESSOAL", "COMERCIAL"];
+  const tipoIcon = extracted.natureza === "PAGAR" ? "💸" : "💰";
+  const naturezaLabel = extracted.natureza === "PAGAR" ? "Gasto" : "Recebimento";
+  const dataHora = now.toLocaleString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "America/Sao_Paulo",
+  });
+  const vencLine = vencimentoDate
+    ? `\n📅 Vencimento: *${vencimentoDate.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}*`
+    : "";
 
-  let extracted = await extractTransactionFromAudio(audioPath, history, allowedContexts);
-  let transcription = extracted?.transcription?.trim() || null;
+  const response =
+    `🎤 _"${transcription}"_\n\n` +
+    `Perfeito, registrei com base no seu áudio. ✅\n\n` +
+    `${tipoIcon} Tipo: *${naturezaLabel.toLowerCase()}*\n` +
+    `💰 Valor: *${formatCurrency(extracted.valor!)}*\n` +
+    `🏷️ Descrição: *${extracted.tipo}*\n` +
+    `📂 Categoria: *${extracted.categoria}* (${extracted.contexto.toLowerCase()})\n` +
+    `🕐 Registro: *${dataHora}*${vencLine}\n🆔 ID: *#${created.id}*\n\n` +
+    `Se quiser, eu já te mostro um *resumo* ou a lista com *ver contas*.`;
 
-  if (transcription) {
-    logger.info(`[Audio] Transcrição: "${transcription}"`);
-  }
+  await saveContext(canonicalPhone, [
+    ...history,
+    { role: "user", content: `[áudio] ${transcription}` },
+    { role: "assistant", content: response },
+  ]);
 
-  await prisma.audioMessage.update({ where: { id: audioRecord.id }, data: { transcription } });
+  return response;
+}
 
-  if (!extracted) {
-    transcription = await transcribeAudio(audioPath);
-    if (transcription) {
-      await prisma.audioMessage.update({ where: { id: audioRecord.id }, data: { transcription } });
-      logger.info(`[Audio] Transcrição fallback: "${transcription}"`);
-      extracted = await extractTransaction(transcription, history, allowedContexts, "audio");
-    } else {
-      pendingNotice.cancel();
-      await sendMessage(canonicalPhone, "⚠️ Não consegui entender o áudio. Pode reenviar ou mandar em texto simples?");
-      return;
-    }
-  }
+async function handleAudioNutritionRoute(
+  canonicalPhone: string,
+  transcription: string,
+  history: AIMessage[],
+  audioClassification: IntentClassification | null,
+): Promise<void> {
+  const nutritionResponse = await runQueuedWithProgress<string | null>(
+    canonicalPhone,
+    "análise nutricional",
+    async () =>
+      enqueueAndWait(
+        QUEUE_NAMES.NUTRITION,
+        { text: transcription, history },
+        {
+          dedupKey: `nutrition_${canonicalPhone}_${normalizeForAudioDedup(transcription)}`.replace(/[^\w.-]+/g, "_").slice(0, 180),
+          timeoutMs: 90000,
+        },
+      ) as Promise<string | null>,
+    async () => resolveNutritionAnswer(transcription, history),
+  );
 
-  if (transcription && (isBMRQuery(transcription) || isChoosingBMRFromMenu(transcription, history) || isBMRFollowUp(transcription, history))) {
-    const response = `🎤 _"${transcription}"_\n\n${formatBMRResponse(transcription)}`;
-    await saveContext(canonicalPhone, [...history, { role: "user", content: `[áudio] ${transcription}` }, { role: "assistant", content: response }]);
-    pendingNotice.cancel();
-    await sendMessage(canonicalPhone, response);
-    return;
-  }
+  const response = nutritionResponse
+    ? `🎤 _"${transcription}"_\n\n${nutritionResponse}`
+    : `🎤 _"${transcription}"_\n\n🥗 Consigo analisar calorias e alimentos, mas preciso de mais detalhes na pergunta.`;
 
-  let response: string;
-  if (transcription && isNutritionQuery(transcription)) {
-    const nutritionResponse = await resolveNutritionAnswer(transcription, history);
-    response = nutritionResponse
-      ? `🎤 _"${transcription}"_\n\n${nutritionResponse}`
-      : `🎤 _"${transcription}"_\n\n🥗 Consigo analisar calorias e se a refeição é saudável, mas preciso do alimento e de uma quantidade aproximada.`;
-  } else if (!extracted.needsMoreInfo && extracted.valor !== null && extracted.valor > 0) {
-    const now = new Date();
-    const vencimentoDate = extracted.vencimento ? new Date(extracted.vencimento + "T12:00:00Z") : null;
-    const created = await prisma.financialTransaction.create({
-      data: {
-          userPhone: canonicalPhone,
-        tipo: extracted.tipo,
-        valor: extracted.valor,
-        natureza: extracted.natureza,
-        context: extracted.contexto,
-        categoria: extracted.categoria,
-        ...(extracted.categoryId ? { categoryId: extracted.categoryId } : {}),
-        vencimento: vencimentoDate,
-        status: "PENDENTE",
-        fonte: "VOZ",
-        rawMessage: transcription,
-        audioStorageKey: filename,
-        audioTranscription: transcription,
-        extractedConfidence: extracted.confidence,
-        needsHumanReview: extracted.confidence < 0.7,
-      },
+  if (nutritionResponse) {
+    await learnFromTurn({
+      text: transcription,
+      intent: "nutrition",
+      success: true,
+      classification: audioClassification || undefined,
+      channel: "audio",
     });
-
-    await prisma.audioMessage.update({ where: { id: audioRecord.id }, data: { transactionId: created.id } });
-    if (vencimentoDate) await scheduleReminders(canonicalPhone, created.id, vencimentoDate);
-    await prisma.whatsappUser.update({ where: { phone: canonicalPhone }, data: { totalTransactions: { increment: 1 } } });
-
-    const tipoIcon = extracted.natureza === "PAGAR" ? "💸" : "💰";
-    const naturezaLabel = extracted.natureza === "PAGAR" ? "Gasto" : "Recebimento";
-    const dataHora = now.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" });
-    const vencLine = vencimentoDate ? `\n📅 Vencimento: *${vencimentoDate.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}*` : "";
-    const audioHeader = transcription ? `🎤 _"${transcription}"_\n\n` : "🎤 *Áudio processado com sucesso!*\n\n";
-    response =
-      `${audioHeader}Perfeito, registrei com base no seu áudio. ✅\n\n` +
-      `${tipoIcon} Tipo: *${naturezaLabel.toLowerCase()}*\n` +
-      `💰 Valor: *${formatCurrency(extracted.valor!)}*\n` +
-      `🏷️ Descrição: *${extracted.tipo}*\n` +
-      `📂 Categoria: *${extracted.categoria}* (${extracted.contexto.toLowerCase()})\n` +
-      `🕐 Registro: *${dataHora}*${vencLine}\n🆔 ID: *#${created.id}*\n\n` +
-      `Se quiser, eu já te mostro um *resumo* ou a lista com *ver contas*.`;
-  } else {
-    const nutritionClarification = transcription ? getNutritionClarificationPrompt(transcription) : null;
-    response = nutritionClarification
-      ? `🎤 _"${transcription}"_\n\n${nutritionClarification}`
-      : transcription
-        ? `🎤 _"${transcription}"_\n\n${extracted.responseMessage}`
-        : `🎤 *Áudio processado*\n\n${extracted.responseMessage}`;
   }
 
-  await saveContext(canonicalPhone, [...history, { role: "user", content: `[áudio] ${transcription || "sem transcrição textual"}` }, { role: "assistant", content: response }]);
-  pendingNotice.cancel();
-  await sendMessage(canonicalPhone, response);
+  await saveContext(canonicalPhone, [
+    ...history,
+    { role: "user", content: `[áudio] ${transcription}` },
+    { role: "assistant", content: response },
+  ]);
+  if (nutritionResponse && isCalorieMacroAnalysisResponse(nutritionResponse)) {
+    await sendNutritionWithMealImage(canonicalPhone, response);
+  } else {
+    await sendMessage(canonicalPhone, response);
+  }
 }
 
 // ─── Processar mensagem de áudio ──────────────────────────────────────────────
@@ -2282,8 +3562,10 @@ export async function processAudio(
   const user = await getOrCreateUser(canonicalPhone, senderName, identity.aliases);
 
   // Gate: cadastro completo + plano ativo
-  const intercepted = await handleOnboarding(user, canonicalPhone, "[áudio]", identity.aliases);
+  const intercepted = await handleOnboarding(user, canonicalPhone, "[áudio]", identity.aliases, senderName);
   if (intercepted) return;
+
+  logClientInteraction(canonicalPhone, "audio_message", "audio").catch(() => {});
 
   // Baixa o áudio
   const media = await downloadMedia(mediaId);
@@ -2340,7 +3622,21 @@ export async function processAudio(
     if (transcription) {
       await prisma.audioMessage.update({ where: { id: audioRecord.id }, data: { transcription } });
       logger.info(`[Audio] Transcrição fallback: "${transcription}"`);
-      extracted = await extractTransaction(transcription, history, audioAllowedContexts, "audio");
+      const transcribedText = transcription;
+      extracted = await runQueuedWithProgress(
+        canonicalPhone,
+        "registro de gastos",
+        async () => enqueueAndWait(QUEUE_NAMES.EXPENSES, {
+          text: transcribedText,
+          history,
+          allowedContexts: audioAllowedContexts,
+          source: "audio",
+        }, {
+          dedupKey: `expense:${canonicalPhone}:${transcribedText}`,
+          timeoutMs: 90000,
+        }) as Promise<Awaited<ReturnType<typeof extractTransaction>>>,
+        async () => extractTransaction(transcribedText, history, audioAllowedContexts, "audio"),
+      );
     } else {
       pendingNotice.cancel();
       await sendMessage(
@@ -2359,14 +3655,49 @@ export async function processAudio(
     return;
   }
 
+  if (transcription) {
+    const audioCanSearchFlights = hasFlightSearch(audioClientProfile?.plan ?? "HOME");
+    const flightHandled = await handleFlightAssistantRoute(
+      canonicalPhone,
+      transcription,
+      history,
+      audioCanSearchFlights,
+      {
+        messagePrefix: `🎤 _"${transcription}"_\n\n`,
+        userContextContent: `[áudio] ${transcription}`,
+      },
+    );
+    if (flightHandled) {
+      pendingNotice.cancel();
+      return;
+    }
+  }
+
   let response: string;
+  let nutritionAnalysisBody: string | null = null;
 
   pendingNotice.cancel();
   if (transcription && isNutritionQuery(transcription)) {
-    const nutritionResponse = await resolveNutritionAnswer(transcription, history);
-    response = nutritionResponse
-      ? `🎤 _"${transcription}"_\n\n${nutritionResponse}`
-      : `🎤 _"${transcription}"_\n\n🥗 Consigo analisar calorias e se a refeição é saudável, mas preciso do alimento e de uma quantidade aproximada.`;
+    const nutritionResponse = await runQueuedWithProgress<string | null>(
+      canonicalPhone,
+      "análise nutricional",
+      async () => enqueueAndWait(QUEUE_NAMES.NUTRITION, {
+        text: transcription,
+        history,
+      }, {
+        dedupKey: `nutrition_${canonicalPhone}_${transcription}`.replace(/[^\w.-]+/g, "_").slice(0, 180),
+        timeoutMs: 90000,
+      }) as Promise<string | null>,
+      async () => resolveNutritionAnswer(transcription, history),
+    );
+    if (nutritionResponse) {
+      nutritionAnalysisBody = nutritionResponse;
+      response = `🎤 _"${transcription}"_\n\n${nutritionResponse}`;
+    } else {
+      response =
+        `🎤 _"${transcription}"_\n\n` +
+        `🥗 Consigo analisar calorias e se a refeição é saudável, mas preciso do alimento e de uma quantidade aproximada.`;
+    }
   } else if (!extracted.needsMoreInfo && extracted.valor !== null && extracted.valor > 0) {
     const nowAudio = new Date();
     const vencimentoDate = extracted.vencimento ? new Date(extracted.vencimento + "T12:00:00Z") : null;
@@ -2443,5 +3774,9 @@ export async function processAudio(
     { role: "assistant", content: response },
   ]);
 
-  await sendMessage(canonicalPhone, response);
+  if (nutritionAnalysisBody && isCalorieMacroAnalysisResponse(nutritionAnalysisBody)) {
+    await sendNutritionWithMealImage(canonicalPhone, response);
+  } else {
+    await sendMessage(canonicalPhone, response);
+  }
 }

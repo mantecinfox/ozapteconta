@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 192" width="256" height="192">
+  <rect width="256" height="192" fill="#ffffff"/>
+  <g fill="none" stroke="#000000" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round">
+    <!-- Rodas (menores que naked) -->
+    <circle cx="64" cy="148" r="20"/>
+    <circle cx="64" cy="148" r="6"/>
+    <circle cx="194" cy="148" r="20"/>
+    <circle cx="194" cy="148" r="6"/>
+    <!-- Carenagem frontal (escudo do scooter) -->
+    <path d="M62 130 Q60 110 70 92 Q72 86 80 86 L96 86 Q100 86 102 90 L108 110 L108 132"/>
+    <!-- Guidão alto -->
+    <path d="M90 86 L92 70"/>
+    <path d="M82 70 L102 70"/>
+    <!-- Plataforma (típica do scooter, plano para os pés) -->
+    <path d="M108 132 L150 132 L150 122 L172 122"/>
+    <!-- Corpo traseiro/baú -->
+    <path d="M172 122 Q180 90 200 88 L218 88 Q226 88 228 96 L228 132 Q228 140 220 142 L194 142"/>
+    <!-- Banco -->
+    <path d="M180 122 L222 122"/>
+    <!-- Espelho -->
+    <path d="M88 70 L80 60"/>
+    <circle cx="78" cy="58" r="3"/>
+    <!-- Chão -->
+    <path d="M20 174 L240 174"/>
+  </g>
+</svg>

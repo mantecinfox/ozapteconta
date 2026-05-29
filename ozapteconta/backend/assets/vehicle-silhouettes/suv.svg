@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 192" width="256" height="192">
+  <rect width="256" height="192" fill="#ffffff"/>
+  <g fill="none" stroke="#000000" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round">
+    <!-- SUV: corpo mais alto, formato mais retangular -->
+    <path d="M18 144 L18 126 Q18 118 28 116 L60 112 Q70 78 88 74 L172 74 Q196 78 212 102 L234 112 Q244 116 244 126 L244 144"/>
+    <!-- Linha do teto (mais reta, mais alta que sedan) -->
+    <path d="M88 74 L172 74"/>
+    <!-- Cabine -->
+    <path d="M70 112 L88 74"/>
+    <path d="M172 74 L210 102"/>
+    <!-- Colunas -->
+    <path d="M128 74 L128 112"/>
+    <path d="M158 74 L158 112"/>
+    <!-- Chão -->
+    <path d="M8 144 L248 144"/>
+    <!-- Rodas (maiores, off-road look) -->
+    <circle cx="68" cy="144" r="16"/>
+    <circle cx="68" cy="144" r="6"/>
+    <circle cx="196" cy="144" r="16"/>
+    <circle cx="196" cy="144" r="6"/>
+    <!-- Para-choque dianteiro mais robusto -->
+    <path d="M220 130 L244 130"/>
+    <!-- Maçaneta -->
+    <path d="M100 122 L120 122"/>
+  </g>
+</svg>

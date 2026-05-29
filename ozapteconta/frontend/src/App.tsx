@@ -5,10 +5,10 @@ import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
-import Users from "@/pages/Users";
 import Clients from "@/pages/Clients";
 import AdminLogs from "@/pages/AdminLogs";
 import AdminWhatsappAccounts from "@/pages/AdminWhatsappAccounts";
+import AdminPriceSources from "@/pages/AdminPriceSources";
 import BotTraining from "@/pages/BotTraining";
 import AiUsage from "@/pages/AiUsage";
 import Settings from "@/pages/Settings";
@@ -73,10 +73,10 @@ function AppRoutes() {
       <Route path="/cliente/painel" element={<ClientProtectedRoute><ClientDashboard /></ClientProtectedRoute>} />
       <Route path="/login" element={user ? <Navigate to={user.role === "CLIENT" ? "/cliente/painel" : "/"} replace /> : <Login />} />
       <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-      <Route path="/users" element={<ProtectedRoute><Users /></ProtectedRoute>} />
       <Route path="/clients" element={<ProtectedRoute><Clients /></ProtectedRoute>} />
       <Route path="/admin-logs" element={<ProtectedRoute><AdminLogs /></ProtectedRoute>} />
       <Route path="/whatsapp-accounts" element={<ProtectedRoute><AdminWhatsappAccounts /></ProtectedRoute>} />
+      <Route path="/price-sources" element={<ProtectedRoute><AdminPriceSources /></ProtectedRoute>} />
       <Route path="/bot-training" element={<ProtectedRoute><BotTraining /></ProtectedRoute>} />
       <Route path="/ai-usage" element={<ProtectedRoute><AiUsage /></ProtectedRoute>} />
       <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />

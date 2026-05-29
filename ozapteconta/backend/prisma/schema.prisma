@@ -167,6 +167,8 @@ model AiProviderConfig {
   enabled        Boolean      @default(false)
   isDefault      Boolean      @default(false)
   isAudioDefault Boolean      @default(false)
+  textPriority   Int          @default(0)
+  audioPriority  Int          @default(0)
   extraConfig    Json?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
@@ -236,10 +238,36 @@ model SystemSetting {
   @@map("system_settings")
 }
 
+// ─── Lições evolutivas de intenção da IA ────────────────────────────────────
+// Registra padrões de texto que precisam ser roteados para um determinado
+// "intent" (nutrition, finance, market, fipe, etc) e telemetria de acertos
+// e erros para evolução contínua. Lições com hits altos ficam prioritárias.
+model AiIntentLesson {
+  id                Int      @id @default(autoincrement())
+  pattern           String   @db.Text
+  patternNormalized String   @db.VarChar(255)
+  intent            String   @db.VarChar(64)
+  exampleInput      String?  @db.Text
+  exampleOutput     String?  @db.Text
+  hits              Int      @default(0)
+  misses            Int      @default(0)
+  confidence        Float    @default(0.5)
+  source            String   @default("system") @db.VarChar(64)
+  enabled           Boolean  @default(true)
+  notes             String?  @db.Text
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([patternNormalized, intent])
+  @@index([intent, enabled])
+  @@map("ai_intent_lessons")
+}
+
 // ─── Client portal (cadastro completo + ativação por QR) ───────────────────
 model ClientProfile {
   id                   Int          @id @default(autoincrement())
   clientType           String       @default("PF") // "PF" ou "PJ"
+  gender               ClientGender?
   fullName             String
   phone                String       @unique
   portalUsername       String?      @unique
@@ -267,16 +295,23 @@ model ClientProfile {
 
   assignedWhatsappAccount GeneratedWhatsappAccount? @relation(fields: [assignedWhatsappAccountId], references: [id])
   subscription ClientSubscription?
+  interactionLogs ClientInteractionLog[]
 
   @@index([status, plan])
   @@index([assignedWhatsappAccountId])
   @@map("client_profiles")
 }
 
+enum ClientGender {
+  MALE
+  FEMALE
+}
+
 enum ClientPlan {
-  HOME     // R$ 15,99/mês - Contas PESSOAL
-  OFFICE   // R$ 19,90/mês - Contas COMERCIAL
-  FULL     // R$ 29,90/mês - PESSOAL + COMERCIAL
+  HOME     // R$ 4,90/mês - Contas PF/PJ
+  OFFICE   // Legado
+  FULL     // R$ 9,90/mês - FIPE, mercado, comparador
+  TRAVEL   // R$ 59,90/mês - Completo + busca de voos
 }
 
 enum ClientStatus {
@@ -560,4 +595,143 @@ model PaymentLog {
 
   @@index([paymentId, createdAt])
   @@map("payment_logs")
+}
+
+// ─── Fontes de pesquisa de preço (comparador de produtos) ───────────────────
+// Lista de varejistas usados pelo serviço priceComparison.
+// O admin pode ligar/desligar cada fonte e ajustar limites/custos sem deploy.
+model PriceSearchSource {
+  id                  Int      @id @default(autoincrement())
+  slug                String   @unique @db.VarChar(48) // mercado_livre, buscape, magalu, kabum, pichau, amazon_br, casas_bahia
+  displayName         String   @db.VarChar(96)
+  enabled             Boolean  @default(true)
+  requiresPlaywright  Boolean  @default(false)
+  costPerQueryCents   Int      @default(0)     // custo de cada consulta (apenas adapters pagos)
+  rateLimitPerMin     Int      @default(30)    // limite por minuto aplicado pelo Bottleneck
+  timeoutMs           Int      @default(8000)
+  notes               String?  @db.Text
+  lastErrorAt         DateTime?
+  lastErrorMessage    String?  @db.Text
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  logs PriceSearchLog[]
+
+  @@map("price_search_sources")
+}
+
+// ─── Telemetria de comparações de preço ──────────────────────────────────────
+model PriceSearchLog {
+  id              Int      @id @default(autoincrement())
+  whatsappPhone   String?  @db.VarChar(32) // null para buscas iniciadas pelo painel admin
+  query           String   @db.VarChar(255)
+  sourceSlug      String   @db.VarChar(48)
+  offersCount     Int      @default(0)
+  minPriceCents   Int?
+  avgPriceCents   Int?
+  maxPriceCents   Int?
+  latencyMs       Int?
+  fromCache       Boolean  @default(false)
+  errorMessage    String?  @db.Text
+  createdAt       DateTime @default(now())
+
+  source PriceSearchSource @relation(fields: [sourceSlug], references: [slug])
+
+  @@index([createdAt])
+  @@index([sourceSlug, createdAt])
+  @@index([whatsappPhone, createdAt])
+  @@map("price_search_logs")
+}
+
+// ─── Cache de silhueta de veículo (FIPE) ────────────────────────────────────
+// Mapeia (marca, modelo, tipo) → categoria de silhueta SVG. Classificação
+// roda 1x (regex local ou fallback genérico) e é reutilizada em consultas
+// futuras, evitando reclassificar a cada chamada.
+model VehicleSilhouetteCache {
+  id            Int      @id @default(autoincrement())
+  brandSlug     String   @db.VarChar(50)
+  modelSlug     String   @db.VarChar(120)
+  vehicleType   String   @db.VarChar(20)   // "cars" | "motorcycles" | "trucks"
+  silhouetteKey String   @db.VarChar(30)   // "hatch", "sedan", "suv", "pickup", "esportivo", "moto-naked", ...
+  source        String   @db.VarChar(20)   // "rule" | "fallback" | "manual"
+  hits          Int      @default(0)
+  lastUsedAt    DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  @@unique([brandSlug, modelSlug, vehicleType])
+  @@index([vehicleType, silhouetteKey])
+  @@map("vehicle_silhouette_cache")
+}
+
+// ─── Limite de consultas FIPE por cliente (WhatsApp) ─────────────────────────
+model FipeClientSearchLog {
+  id          Int      @id @default(autoincrement())
+  userPhone   String   @db.VarChar(20)
+  vehicleType String   @db.VarChar(20)
+  rawQuery    String   @db.VarChar(200)
+  success     Boolean  @default(true)
+  searchedAt  DateTime @default(now())
+
+  @@index([userPhone, searchedAt])
+  @@index([userPhone, vehicleType, searchedAt])
+  @@map("fipe_client_search_logs")
+}
+
+// ─── Limite de buscas de voos por cliente (WhatsApp) ─────────────────────────
+model FlightSearchLog {
+  id            Int      @id @default(autoincrement())
+  userPhone     String   @db.VarChar(20)
+  originCode    String   @db.VarChar(8)
+  destinationCode String @db.VarChar(8)
+  outboundDate  String   @db.VarChar(10)
+  rawQuery      String   @db.VarChar(300)
+  success       Boolean  @default(true)
+  resultCount   Int      @default(0)
+  searchedAt    DateTime @default(now())
+
+  @@index([userPhone, searchedAt])
+  @@map("flight_search_logs")
+}
+
+// ─── Cache de indicadores macro (fallback stale) ─────────────────────────────
+model MacroIndicatorSnapshot {
+  id            Int      @id @default(autoincrement())
+  indicatorKey  String   @db.VarChar(48)
+  value         Float
+  referenceDate String   @db.VarChar(32)
+  sourceSlug    String   @db.VarChar(48)
+  fetchedAt     DateTime @default(now())
+
+  @@index([indicatorKey, fetchedAt])
+  @@map("macro_indicator_snapshots")
+}
+
+// ─── Limite de consultas FipeZap por cliente ─────────────────────────────────
+model FipeZapSearchLog {
+  id          Int      @id @default(autoincrement())
+  userPhone   String   @db.VarChar(20)
+  rawQuery    String   @db.VarChar(200)
+  scope       String   @db.VarChar(32)
+  success     Boolean  @default(true)
+  searchedAt  DateTime @default(now())
+
+  @@index([userPhone, searchedAt])
+  @@map("fipezap_search_logs")
+}
+
+// ─── Log unificado de interações por cliente (analytics de uso) ──────────────
+model ClientInteractionLog {
+  id        Int      @id @default(autoincrement())
+  clientId  Int
+  userPhone String   @db.VarChar(20)
+  intent    String   @db.VarChar(40)
+  channel   String   @db.VarChar(10) // "text" ou "audio"
+  createdAt DateTime @default(now())
+
+  client ClientProfile @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId, intent, createdAt])
+  @@index([userPhone, createdAt])
+  @@index([createdAt])
+  @@map("client_interaction_logs")
 }

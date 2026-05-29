@@ -2,7 +2,7 @@ import axios from "axios";
 import FormData from "form-data";
 import { prisma } from "../config/prisma";
 import { logger } from "../utils/logger";
-import { prepareWhatsAppText } from "../utils/whatsappText";
+import { prepareWhatsAppText, splitWhatsAppText } from "../utils/whatsappText";
 import { whatsappQrPairingService } from "./whatsappQrPairingService";
 
 interface WppConfig {
@@ -101,6 +101,29 @@ async function trySendImageViaQr(
   return false;
 }
 
+async function trySendImageBufferViaQr(
+  to: string,
+  params: { buffer: Buffer; caption?: string },
+): Promise<boolean> {
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const sentViaQr = await whatsappQrPairingService.sendImageBufferUsingConnectedSession(
+      to,
+      params.buffer,
+      params.caption,
+    );
+    if (sentViaQr) {
+      logger.info(`[WhatsApp] Imagem (buffer) enviada por sessão QR para ${to} na tentativa ${attempt}`);
+      return true;
+    }
+
+    if (attempt < 4) {
+      await sleep(2000);
+    }
+  }
+
+  return false;
+}
+
 async function getConfig(): Promise<WppConfig | null> {
   const cfg = await prisma.whatsappConfig.findFirst();
   if (!cfg?.accessToken || !cfg?.phoneNumberId || !cfg.enabled) return null;
@@ -111,10 +134,12 @@ async function getConfig(): Promise<WppConfig | null> {
   };
 }
 
-// ─── Enviar mensagem de texto ─────────────────────────────────────────────────
-export async function sendMessage(to: string, text: string): Promise<boolean> {
-  const textoUtf8 = prepareWhatsAppText(text);
-  const cfg = await getConfig();
+/** Indicador "digitando..." na sessão QR (Baileys). */
+export async function startComposingIndicator(to: string): Promise<() => Promise<void>> {
+  return whatsappQrPairingService.startComposingSession(to);
+}
+
+async function sendMessageChunk(to: string, textoUtf8: string, cfg: WppConfig | null): Promise<boolean> {
   if (!cfg) {
     for (let attempt = 1; attempt <= 3; attempt++) {
       const sentViaQr = await whatsappQrPairingService.sendMessageUsingConnectedSession(to, textoUtf8);
@@ -169,6 +194,23 @@ export async function sendMessage(to: string, text: string): Promise<boolean> {
   }
 
   return false;
+}
+
+// ─── Enviar mensagem de texto ─────────────────────────────────────────────────
+export async function sendMessage(to: string, text: string): Promise<boolean> {
+  const blocos = splitWhatsAppText(text);
+  const cfg = await getConfig();
+  let allOk = true;
+
+  for (let i = 0; i < blocos.length; i += 1) {
+    const ok = await sendMessageChunk(to, blocos[i], cfg);
+    if (!ok) allOk = false;
+    if (i < blocos.length - 1) {
+      await sleep(400);
+    }
+  }
+
+  return allOk;
 }
 
 export async function sendDocument(
@@ -296,6 +338,83 @@ export async function sendImageByUrl(
       return true;
     }
 
+    return false;
+  }
+}
+
+/**
+ * Envia uma imagem a partir de um Buffer em memória (PNG/JPEG/WebP).
+ * Tenta primeiro a sessão QR conectada (Baileys aceita Buffer direto). Se a
+ * API oficial estiver configurada e a sessão QR falhar, faz upload via
+ * `/media` da Cloud API e depois envia. Nunca lança — retorna boolean.
+ */
+export async function sendImageBuffer(
+  to: string,
+  params: { buffer: Buffer; mimeType?: string; caption?: string; fileName?: string },
+): Promise<boolean> {
+  /* SANITY CHECK: buffer não vazio */
+  if (!params.buffer || params.buffer.length === 0) {
+    logger.warn(`[WhatsApp] sendImageBuffer chamado com buffer vazio para ${to}`);
+    return false;
+  }
+
+  const sentViaQr = await trySendImageBufferViaQr(to, {
+    buffer: params.buffer,
+    caption: params.caption,
+  });
+  if (sentViaQr) return true;
+
+  const cfg = await getConfig();
+  if (!cfg) {
+    logger.warn(`[WhatsApp] sem API oficial e sem sessão QR — imagem (buffer) NÃO enviada para ${to}`);
+    return false;
+  }
+
+  try {
+    const mime = params.mimeType || "image/png";
+    const fileName = params.fileName || "image.png";
+
+    const uploadForm = new FormData();
+    uploadForm.append("messaging_product", "whatsapp");
+    uploadForm.append("type", mime);
+    uploadForm.append("file", new Blob([params.buffer], { type: mime }), fileName);
+
+    const uploadRes = await fetch(`${cfg.apiBase}/${cfg.phoneNumberId}/media`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${cfg.accessToken}` },
+      body: uploadForm,
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!uploadRes.ok) {
+      throw new Error(`upload falhou: ${uploadRes.status} ${await uploadRes.text()}`);
+    }
+    const { id: mediaId } = (await uploadRes.json()) as { id: string };
+
+    const sendRes = await fetch(`${cfg.apiBase}/${cfg.phoneNumberId}/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${cfg.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: to.replace(/\D/g, ""),
+        type: "image",
+        image: {
+          id: mediaId,
+          caption: params.caption ? prepareWhatsAppText(params.caption) : undefined,
+        },
+      }),
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!sendRes.ok) {
+      throw new Error(`send falhou: ${sendRes.status} ${await sendRes.text()}`);
+    }
+    logger.info(`[WhatsApp] Imagem (buffer) enviada via Cloud API para ${to}`);
+    return true;
+  } catch (err) {
+    logger.error(`[WhatsApp] sendImageBuffer falhou para ${to}:`, err);
     return false;
   }
 }

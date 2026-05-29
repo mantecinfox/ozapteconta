@@ -12,14 +12,7 @@ import api from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle, Badge, Skeleton, Button } from "@/components/ui";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-
-function formatBRL(value: number) {
-  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
-}
-
-const PLAN_COLORS: Record<string, string> = { HOME: "#3b82f6", OFFICE: "#22c55e", FULL: "#f59e0b" };
-const PLAN_LABELS: Record<string, string> = { HOME: "Home", OFFICE: "Office", FULL: "Full" };
-const PIE_COLORS = ["#3b82f6", "#22c55e", "#f59e0b", "#ef4444"];
+import { formatBRL, PLAN_COLORS, PLAN_LABELS, PIE_COLORS, CLIENT_STATUS_MAP, PAYMENT_STATUS_MAP } from "@/lib/clientUtils";
 
 interface ClientMetrics {
   totalClients: number; activeClients: number; pendingClients: number; inactiveClients: number;
@@ -30,15 +23,7 @@ interface ClientMetrics {
   growthLast6Months: Array<{ month: string; novos: number }>;
 }
 
-const STATUS_PAY_MAP: Record<string, { label: string; color: "success" | "warning" | "destructive" | "secondary" }> = {
-  APPROVED: { label: "Aprovado", color: "success" }, PENDING: { label: "Pendente", color: "warning" },
-  PROCESSING: { label: "Processando", color: "warning" }, FAILED: { label: "Falhou", color: "destructive" },
-  DECLINED: { label: "Recusado", color: "destructive" }, REFUNDED: { label: "Estornado", color: "secondary" },
-  EXPIRED: { label: "Expirado", color: "secondary" },
-};
-const CLIENT_STATUS_MAP: Record<string, { label: string; color: "success" | "warning" | "secondary" }> = {
-  ACTIVE: { label: "Ativo", color: "success" }, PENDING_ACTIVATION: { label: "Aguardando", color: "warning" }, INACTIVE: { label: "Inativo", color: "secondary" },
-};
+const STATUS_PAY_MAP = PAYMENT_STATUS_MAP;
 
 export default function Dashboard() {
   const { data: m, isLoading, refetch } = useQuery<ClientMetrics>({

@@ -198,8 +198,19 @@ async function main() {
     {
       plan: "FULL",
       displayName: "Completo",
-      description: "Completo: gerencie contas pessoais e comerciais em uma única plataforma. Ideal para autônomos e empreendedores.",
+      description: "Completo: contas PF/PJ, FIPE veículos, FipeZap imóveis, mercado financeiro, indicadores macro (IPCA, CDI, IPC-Fipe) e comparador de preços.",
       priceMonthly: "9.90",
+      allowedContexts: '["PESSOAL", "COMERCIAL"]',
+      maxCategories: 50,
+      maxTransactions: 5000,
+      maxUsers: 2,
+      supportLevel: "priority" as const,
+    },
+    {
+      plan: "TRAVEL",
+      displayName: "Travel",
+      description: "Travel: todos os recursos do Completo + busca de voos nacionais com preços, horários e companhias via Apify/Google Flights.",
+      priceMonthly: "59.90",
       allowedContexts: '["PESSOAL", "COMERCIAL"]',
       maxCategories: 50,
       maxTransactions: 5000,
@@ -224,7 +235,7 @@ async function main() {
       create: p as any,
     });
   }
-  console.log("✅ Planos de subscrição atualizados (Basico R$4,90 e Completo R$9,90; Office legado)");
+  console.log("✅ Planos de subscrição atualizados (Básico R$4,90, Completo R$9,90, Travel R$59,90)");
 
   // Categorias de despesas PESSOAL (Home / Full)
   const personalCategories = [
@@ -356,6 +367,109 @@ async function main() {
     },
   });
   console.log("✅ Configuração Mercado Pago criada (preencher credenciais no dashboard)");
+
+  // Fontes de pesquisa de preço (comparador de produtos)
+  const priceSources = [
+    {
+      slug: "mercado_livre",
+      displayName: "Mercado Livre",
+      enabled: false,
+      requiresPlaywright: false,
+      costPerQueryCents: 0,
+      rateLimitPerMin: 60,
+      timeoutMs: 8000,
+      notes:
+        "API exige OAuth desde 2024. Cadastre uma aplicação em " +
+        "https://developers.mercadolivre.com.br/devcenter/applications/manage " +
+        "e configure MERCADO_LIVRE_CLIENT_ID e MERCADO_LIVRE_CLIENT_SECRET no .env do backend. " +
+        "Depois habilite esta fonte no painel.",
+    },
+    {
+      slug: "buscape_api",
+      displayName: "Buscapé API",
+      enabled: false,
+      requiresPlaywright: false,
+      costPerQueryCents: 0,
+      rateLimitPerMin: 30,
+      timeoutMs: 8000,
+      notes:
+        "API oficial Buscapé (app-token + auth-token). Configure BUSCAPE_APP_TOKEN e " +
+        "BUSCAPE_AUTH_TOKEN no .env e habilite esta fonte. Fallback: slug buscape (scraping).",
+    },
+    {
+      slug: "buscape",
+      displayName: "Buscapé",
+      enabled: true,
+      requiresPlaywright: false,
+      costPerQueryCents: 0,
+      rateLimitPerMin: 20,
+      timeoutMs: 8000,
+      notes: "Agregador — scraping leve via HTTP + cheerio",
+    },
+    {
+      slug: "magalu",
+      displayName: "Magazine Luiza",
+      enabled: true,
+      requiresPlaywright: false,
+      costPerQueryCents: 0,
+      rateLimitPerMin: 15,
+      timeoutMs: 8000,
+      notes: "Página de busca pública — HTTP + cheerio",
+    },
+    {
+      slug: "kabum",
+      displayName: "KaBuM!",
+      enabled: true,
+      requiresPlaywright: false,
+      costPerQueryCents: 0,
+      rateLimitPerMin: 20,
+      timeoutMs: 8000,
+      notes: "Eletrônicos e informática — HTTP + cheerio",
+    },
+    {
+      slug: "pichau",
+      displayName: "Pichau",
+      enabled: true,
+      requiresPlaywright: false,
+      costPerQueryCents: 0,
+      rateLimitPerMin: 20,
+      timeoutMs: 8000,
+      notes: "Eletrônicos e informática — HTTP + cheerio",
+    },
+    {
+      slug: "amazon_br",
+      displayName: "Amazon Brasil",
+      enabled: false,
+      requiresPlaywright: true,
+      costPerQueryCents: 0,
+      rateLimitPerMin: 5,
+      timeoutMs: 15000,
+      notes: "Requer Playwright + stealth (proteção anti-bot). Ativar somente após instalar Chromium.",
+    },
+    {
+      slug: "casas_bahia",
+      displayName: "Casas Bahia",
+      enabled: false,
+      requiresPlaywright: true,
+      costPerQueryCents: 0,
+      rateLimitPerMin: 5,
+      timeoutMs: 15000,
+      notes: "Requer Playwright (Akamai/Cloudflare). Ativar após instalar Chromium.",
+    },
+  ];
+
+  for (const source of priceSources) {
+    await prisma.priceSearchSource.upsert({
+      where: { slug: source.slug },
+      update: {
+        displayName: source.displayName,
+        requiresPlaywright: source.requiresPlaywright,
+        notes: source.notes,
+      },
+      create: source,
+    });
+  }
+  console.log(`✅ Fontes do comparador de preço criadas (${priceSources.length} fontes)`);
 
   console.log("\n🎉 Seed concluído com sucesso!");
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");

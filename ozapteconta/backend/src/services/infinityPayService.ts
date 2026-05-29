@@ -1,6 +1,9 @@
 import axios, { AxiosInstance } from "axios";
 import { logger } from "../utils/logger";
 import { prisma } from "../config/prisma";
+import { applyBillingCycleFromPayment } from "./subscriptionBillingCycleService";
+import { restoreSubscriptionAfterPayment } from "./subscriptionAccessService";
+import { normalizePhoneToE164 } from "./whatsappHealthService";
 
 // ─── Types InfinityPay ──────────────────────────────────────────────────────
 export interface InfinityPayCustomer {
@@ -151,63 +154,136 @@ export class InfinityPayService {
       };
     }
 
+    const amount = Number(data.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return { success: false, error: `Valor inválido para link de pagamento: ${data.amount}` };
+    }
+
     const http = this.buildAxios(creds.apiKey, creds.merchantKey);
 
-    try {
-      // handle = merchantKey sem o prefixo "$"
-      const normalizedHandle = creds.merchantKey.replace(/^\$/, "").trim();
-
-      if (!normalizedHandle) {
-        return { success: false, error: "Handle da InfinitePay não informado (Merchant Key)." };
-      }
-
-      const amountInCents = Math.round(data.amount * 100);
-      const payload = {
-        handle: normalizedHandle,
-        items: [
-          {
-            quantity: 1,
-            price: amountInCents,
-            description: data.description,
-          },
-        ],
-        order_nsu:
-          String(data.metadata?.order_nsu || data.metadata?.subscription_id || data.metadata?.client_id || "") ||
-          `ozapteconta-${Date.now()}`,
-        ...(data.customer_name || data.customer_email || data.customer_phone
-          ? {
-              customer: {
-                ...(data.customer_name ? { name: data.customer_name } : {}),
-                ...(data.customer_email ? { email: data.customer_email } : {}),
-                ...(data.customer_phone ? { phone_number: data.customer_phone } : {}),
-              },
-            }
-          : {}),
-      };
-
-      // Checkout InfinitePay: POST /links
-      const response = await http.post("/links", payload);
-      const linkData = response.data;
-
-      // O campo com a URL pode variar conforme versão da API
-      const url: string =
-        linkData.url ??
-        linkData.checkout_url ??
-        linkData.payment_url ??
-        linkData.link ??
-        "";
-
-      logger.info(`[InfinityPay] Payment link criado: ${linkData.id} → ${url}`);
-
-      return {
-        success: true,
-        data: { ...linkData, resolved_url: url },
-      };
-    } catch (error: any) {
-      const msg = error.response?.data?.message || error.message;
-      logger.error("[InfinityPay] Falha ao criar payment link:", error.response?.data);
-      return { success: false, error: msg };
+    if (!creds.apiKey) {
+      logger.info("[InfinityPay] Modo checkout: apenas Merchant Key (sem API Key) — suficiente para links de pagamento.");
     }
+
+    const normalizedHandle = creds.merchantKey.replace(/^\$/, "").trim();
+    if (!normalizedHandle) {
+      return { success: false, error: "Handle da InfinitePay não informado (Merchant Key)." };
+    }
+
+    const amountInCents = Math.round(amount * 100);
+    const orderNsu =
+      String(data.metadata?.order_nsu || data.metadata?.subscription_id || data.metadata?.client_id || "") ||
+      `ozapteconta-${Date.now()}`;
+
+    const basePayload = {
+      handle: normalizedHandle,
+      items: [
+        {
+          quantity: 1,
+          price: amountInCents,
+          description: String(data.description || "ozapteconta").slice(0, 200),
+        },
+      ],
+      order_nsu: orderNsu,
+    };
+
+    const customerEmail = String(data.customer_email || "").trim();
+    const customerName = String(data.customer_name || "").trim();
+    const customerPhone = data.customer_phone
+      ? normalizePhoneToE164(String(data.customer_phone))
+      : "";
+
+    const payloads: Array<Record<string, unknown>> = [];
+
+    if (customerName || customerEmail || customerPhone) {
+      payloads.push({
+        ...basePayload,
+        customer: {
+          ...(customerName ? { name: customerName } : {}),
+          ...(customerEmail ? { email: customerEmail } : {}),
+          ...(customerPhone ? { phone_number: customerPhone } : {}),
+        },
+      });
+    }
+
+    payloads.push(basePayload);
+
+    let lastError = "Falha ao criar link InfinitePay";
+
+    for (let attempt = 0; attempt < payloads.length; attempt += 1) {
+      try {
+        const response = await http.post("/links", payloads[attempt]);
+        const linkData = response.data;
+        const url = this.extractCheckoutUrl(linkData);
+
+        if (!url) {
+          lastError = "InfinitePay respondeu sem URL de checkout";
+          logger.error("[InfinityPay] Resposta sem URL:", JSON.stringify(linkData)?.slice(0, 500));
+          continue;
+        }
+
+        logger.info(`[InfinityPay] Payment link criado: ${linkData.id ?? orderNsu} → ${url}`);
+
+        await prisma.paymentGatewayLog.create({
+          data: {
+            provider: "infinitypay",
+            action: "payment_link_created",
+            requestData: {
+              orderNsu,
+              amount,
+              attempt: attempt + 1,
+              checkoutUrl: url,
+            },
+            responseData: linkData,
+          },
+        }).catch((logErr) => {
+          logger.warn("[InfinityPay] Falha ao registrar log de link:", logErr);
+        });
+
+        return {
+          success: true,
+          data: { ...linkData, resolved_url: url },
+        };
+      } catch (error: any) {
+        const msg = error.response?.data?.message || error.response?.data?.error || error.message;
+        lastError = String(msg);
+        logger.warn(
+          `[InfinityPay] Tentativa ${attempt + 1}/${payloads.length} falhou ao criar link: ${lastError}`,
+          error.response?.data,
+        );
+      }
+    }
+
+    await prisma.paymentGatewayLog.create({
+      data: {
+        provider: "infinitypay",
+        action: "payment_link_failed",
+        requestData: { orderNsu, amount, description: data.description },
+        responseData: { error: lastError },
+      },
+    }).catch(() => null);
+
+    return { success: false, error: lastError };
+  }
+
+  private extractCheckoutUrl(linkData: Record<string, unknown> | null | undefined): string {
+    if (!linkData || typeof linkData !== "object") return "";
+
+    const candidates = [
+      linkData.url,
+      linkData.checkout_url,
+      linkData.payment_url,
+      linkData.link,
+      linkData.short_url,
+      (linkData.data as Record<string, unknown> | undefined)?.url,
+    ];
+
+    for (const candidate of candidates) {
+      const value = String(candidate || "").trim();
+      if (value.startsWith("http")) return value;
+    }
+
+    return "";
   }
 
   /**
@@ -472,20 +548,36 @@ export class InfinityPayService {
       }
 
       if (subscription) {
-        await prisma.clientSubscription.update({
-          where: { id: subscription.id },
-          data: {
-            status: "ACTIVE",
-            lastBillingDate: chargedAt,
-            nextBillingDate: this.addDays(chargedAt, 30),
-          },
-        });
+        const wasBlocked =
+          subscription.status === "SUSPENDED" ||
+          subscription.status === "PAST_DUE" ||
+          Boolean(metadata.renewal_reason) ||
+          Boolean(metadata.access_blocked);
 
-        // Ativar o cliente após pagamento confirmado
+        await applyBillingCycleFromPayment(subscription.id, chargedAt);
+
         await prisma.clientProfile.update({
           where: { id: subscription.clientId },
           data: { status: "ACTIVE", activatedAt: chargedAt },
         });
+
+        if (wasBlocked) {
+          const client = await prisma.clientProfile.findUnique({
+            where: { id: subscription.clientId },
+            select: { phone: true },
+          });
+          const planRow = await prisma.subscriptionPlan.findUnique({
+            where: { plan: subscription.plan },
+            select: { displayName: true },
+          });
+          if (client?.phone) {
+            await restoreSubscriptionAfterPayment(
+              subscription.id,
+              client.phone,
+              planRow?.displayName || subscription.plan,
+            );
+          }
+        }
       }
 
       await prisma.paymentLog.create({

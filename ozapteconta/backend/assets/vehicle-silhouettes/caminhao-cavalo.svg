@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 192" width="256" height="192">
+  <rect width="256" height="192" fill="#ffffff"/>
+  <g fill="none" stroke="#000000" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round">
+    <!-- Cavalo mecânico (esquerda) + semi-reboque (direita) -->
+    <!-- Cavalo: cabine alta -->
+    <path d="M16 144 L16 96 Q16 86 26 86 L72 86 Q80 86 82 92 L88 126 L88 144"/>
+    <!-- Janela do cavalo -->
+    <path d="M24 96 L72 96 L72 122 L24 122 Z"/>
+    <!-- 5ª roda (acoplamento) -->
+    <path d="M88 126 L114 126"/>
+    <!-- Semi-reboque (longo, alto) -->
+    <path d="M114 64 L244 64 L244 134 L114 134 Z"/>
+    <path d="M114 86 L244 86"/>
+    <path d="M114 108 L244 108"/>
+    <!-- Chão -->
+    <path d="M8 158 L252 158"/>
+    <!-- Eixos: cavalo (1) + reboque (2 juntos) -->
+    <circle cx="56" cy="158" r="14"/>
+    <circle cx="56" cy="158" r="5"/>
+    <circle cx="174" cy="158" r="14"/>
+    <circle cx="174" cy="158" r="5"/>
+    <circle cx="208" cy="158" r="14"/>
+    <circle cx="208" cy="158" r="5"/>
+    <!-- Para-choque -->
+    <path d="M16 148 L34 148"/>
+    <!-- Espelho -->
+    <path d="M22 86 L22 76"/>
+    <path d="M18 76 L26 76"/>
+  </g>
+</svg>

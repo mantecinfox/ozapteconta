@@ -3,6 +3,7 @@ import path from "path";
 import os from "os";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import ffmpeg from "fluent-ffmpeg";
+import FormDataLib from "form-data";
 import { prisma } from "../config/prisma";
 import { logger } from "../utils/logger";
 import { writeAiUsageLog } from "./aiUsageMetricsService";
@@ -10,6 +11,7 @@ import { writeAiUsageLog } from "./aiUsageMetricsService";
 const DEFAULT_ABACUS_AUDIO_MODELS = [
   "gpt-4o-audio-preview",
   "gpt-4o-mini-audio-preview",
+  "gemini-2.5-flash",
 ];
 
 const AUDIO_CHAIN_CACHE_TTL_MS = 60 * 1000;
@@ -59,6 +61,20 @@ async function convertToWav(inputPath: string): Promise<string> {
       .audioChannels(1)
       .audioCodec("pcm_s16le")
       .format("wav")
+      .on("end", () => resolve(outputPath))
+      .on("error", (err) => reject(err))
+      .save(outputPath);
+  });
+}
+
+// ─── Converte qualquer áudio para MP3 (ABACUS/Whisper API aceitam wav/mp3) ──
+async function convertToMp3(inputPath: string): Promise<string> {
+  const outputPath = path.join(os.tmpdir(), `whisper_${Date.now()}.mp3`);
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .audioCodec("libmp3lame")
+      .audioBitrate(96)
+      .format("mp3")
       .on("end", () => resolve(outputPath))
       .on("error", (err) => reject(err))
       .save(outputPath);
@@ -163,11 +179,6 @@ async function transcribeViaAbacusAudioModels(audioPath: string, language: strin
 
   try {
     const audioFormat = detectAudioFormatFromPath(audioPath);
-    if (audioFormat !== "mp3" && audioFormat !== "wav") {
-      logger.info(`[Transcription] ABACUS aceita apenas wav/mp3; áudio ${audioFormat} será transcrito por Whisper/API antes de ir para IA.`);
-      return null;
-    }
-
     const audioBuffer = await fs.promises.readFile(audioPath);
     const audioBase64 = audioBuffer.toString("base64");
 
@@ -177,6 +188,95 @@ async function transcribeViaAbacusAudioModels(audioPath: string, language: strin
       const startedAt = Date.now();
       const attempt = modelChain.indexOf(model) + 1;
       try {
+        // ── Prioridade 3: Gemini audio transcription ───────────────────────────
+        if (model.startsWith("gemini")) {
+          const geminiProvider = await prisma.aiProviderConfig.findFirst({
+            where: { provider: "GEMINI", enabled: true },
+          });
+          if (!geminiProvider?.apiKey) {
+            logger.warn(`[Transcription] GEMINI não configurado; pulando modelo ${model}.`);
+            continue;
+          }
+          const geminiMimeType =
+            audioFormat === "mp3" ? "audio/mpeg" :
+            audioFormat === "wav" ? "audio/wav" : "audio/ogg";
+          const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiProvider.apiKey}`;
+
+          const geminiResponse = await fetch(geminiEndpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              system_instruction: {
+                parts: [{ text: "Você é um assistente de transcrição. Retorne somente a transcrição do áudio em português brasileiro, sem explicações adicionais." }],
+              },
+              contents: [{
+                role: "user",
+                parts: [
+                  { text: `Transcreva este áudio em português brasileiro (idioma: ${language}).` },
+                  { inline_data: { mime_type: geminiMimeType, data: audioBase64 } },
+                ],
+              }],
+              generationConfig: { temperature: 0, maxOutputTokens: 800 },
+            }),
+            signal: AbortSignal.timeout(45000),
+          });
+
+          if (!geminiResponse.ok) {
+            const errText = await geminiResponse.text();
+            logger.warn(`[Transcription] GEMINI ${model} falhou (${geminiResponse.status}): ${errText.substring(0, 220)}`);
+            await writeAiUsageLog({
+              ts: new Date().toISOString(),
+              provider: "GEMINI",
+              model,
+              channel: "audio",
+              stage: "transcribe",
+              success: false,
+              latencyMs: Date.now() - startedAt,
+              fallbackUsed: attempt > 1,
+              attempt,
+              error: `HTTP ${geminiResponse.status}`,
+            });
+            continue;
+          }
+
+          const geminiData = (await geminiResponse.json()) as {
+            candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+            usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number };
+          };
+          const geminiTranscript = (geminiData.candidates?.[0]?.content?.parts ?? [])
+            .map((p) => p.text || "")
+            .join(" ")
+            .trim();
+
+          if (geminiTranscript) {
+            logger.info(`[Transcription] GEMINI ${model} respondeu em ${Date.now() - startedAt}ms: "${geminiTranscript.substring(0, 80)}"`);
+            await writeAiUsageLog({
+              ts: new Date().toISOString(),
+              provider: "GEMINI",
+              model,
+              channel: "audio",
+              stage: "transcribe",
+              success: true,
+              latencyMs: Date.now() - startedAt,
+              fallbackUsed: attempt > 1,
+              attempt,
+              promptTokens: Number(geminiData.usageMetadata?.promptTokenCount || 0),
+              completionTokens: Number(geminiData.usageMetadata?.candidatesTokenCount || 0),
+              totalTokens: Number(geminiData.usageMetadata?.totalTokenCount || 0),
+            });
+            return geminiTranscript;
+          }
+
+          logger.warn(`[Transcription] GEMINI ${model} respondeu sem texto. Tentando próximo modelo.`);
+          continue;
+        }
+
+        // ── Prioridades 1 & 2: ABACUS audio transcription ─────────────────────
+        if (audioFormat !== "mp3" && audioFormat !== "wav") {
+          logger.info(`[Transcription] ABACUS aceita apenas wav/mp3; modelo ${model} pulado para formato ${audioFormat}.`);
+          continue;
+        }
+
         const body = {
           model,
           temperature: 0,
@@ -305,8 +405,20 @@ async function transcribeViaWhisperApi(audioPath: string, language: string): Pro
   try {
     const startedAt = Date.now();
     const audioBuffer = await fs.promises.readFile(audioPath);
-    const formData = new FormData();
-    formData.append("file", new Blob([audioBuffer]), path.basename(audioPath));
+    const ext = (path.extname(audioPath) || ".mp3").toLowerCase();
+    const contentTypeByExt: Record<string, string> = {
+      ".mp3": "audio/mpeg",
+      ".wav": "audio/wav",
+      ".ogg": "audio/ogg",
+      ".m4a": "audio/mp4",
+      ".mp4": "audio/mp4",
+      ".webm": "audio/webm",
+    };
+    const fileName = `audio${ext}`;
+    const contentType = contentTypeByExt[ext] || "application/octet-stream";
+
+    const formData = new FormDataLib();
+    formData.append("file", audioBuffer, { filename: fileName, contentType });
     const whisperModel = provider.provider === "GROQ" ? "whisper-large-v3" : "whisper-1";
     formData.append("model", whisperModel);
     formData.append("language", language);
@@ -321,8 +433,9 @@ async function transcribeViaWhisperApi(audioPath: string, language: string): Pro
       method: "POST",
       headers: {
         Authorization: `Bearer ${provider.apiKey}`,
+        ...formData.getHeaders(),
       },
-      body: formData,
+      body: formData as any,
       signal: AbortSignal.timeout(60000),
     });
 
@@ -382,15 +495,36 @@ async function transcribeViaWhisperApi(audioPath: string, language: string): Pro
 // ─── Ponto de entrada principal ──────────────────────────────────────────────
 // Tenta: 1) ABACUS (cadeia de modelos de áudio) → 2) Whisper API (OpenAI/Groq) → 3) Whisper local
 export async function transcribeAudio(audioPath: string, language = "pt"): Promise<string | null> {
-  // 1) Transcreve o áudio para texto via Whisper API (OpenAI/Groq)
-  const apiResult = await transcribeViaWhisperApi(audioPath, language);
-  if (apiResult) return apiResult;
+  // Converte para MP3 antes para que ABACUS aceite (só recebe wav/mp3) e
+  // que o Whisper API receba um Content-Type correto.
+  let workPath = audioPath;
+  const ext = path.extname(audioPath).toLowerCase();
+  let tempMp3: string | null = null;
+  if (ext !== ".mp3" && ext !== ".wav") {
+    try {
+      tempMp3 = await convertToMp3(audioPath);
+      workPath = tempMp3;
+      logger.info(`[Transcription] Áudio convertido para MP3: ${tempMp3}`);
+    } catch (err) {
+      logger.warn(`[Transcription] Falha ao converter para MP3 (${err}); seguindo com formato original.`);
+    }
+  }
 
-  // 2) Se o áudio já vier em wav/mp3, ainda pode tentar ABACUS nativo como fallback
-  const abacusAudioResult = await transcribeViaAbacusAudioModels(audioPath, language);
-  if (abacusAudioResult) return abacusAudioResult;
+  try {
+    // 1) Transcreve o áudio para texto via Whisper API (OpenAI/Groq)
+    const apiResult = await transcribeViaWhisperApi(workPath, language);
+    if (apiResult) return apiResult;
 
-  // 3) Fallback local
-  logger.info("[Transcription] ABACUS/Whisper API indisponíveis — usando Whisper local...");
-  return transcribeLocal(audioPath, language);
+    // 2) Tenta ABACUS nativo (agora com mp3 garantido)
+    const abacusAudioResult = await transcribeViaAbacusAudioModels(workPath, language);
+    if (abacusAudioResult) return abacusAudioResult;
+
+    // 3) Fallback local
+    logger.info("[Transcription] ABACUS/Whisper API indisponíveis — usando Whisper local...");
+    return await transcribeLocal(workPath, language);
+  } finally {
+    if (tempMp3) {
+      fs.promises.unlink(tempMp3).catch(() => {});
+    }
+  }
 }

@@ -1,8 +1,10 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import api from "@/lib/api";
+import { PlanCatalog, buildPlanSelectOptions } from "@/components/PlanCatalog";
 import { Button, Card, CardContent, CardHeader, CardTitle, Input, Select } from "@/components/ui";
+import { PLAN_CATALOG_FALLBACK, type PlanCode } from "@/lib/clientUtils";
 
 type RegisterResponse = {
   qrToken: string;
@@ -27,7 +29,7 @@ const EMPTY_FORM = {
   addressCity: "",
   addressState: "",
   addressZipCode: "",
-  plan: "HOME",
+  plan: "HOME" as PlanCode,
 };
 
 export default function ClientSignup() {
@@ -37,6 +39,8 @@ export default function ClientSignup() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [error, setError] = useState("");
   const [created, setCreated] = useState<RegisterResponse | null>(null);
+
+  const planOptions = useMemo(() => buildPlanSelectOptions(PLAN_CATALOG_FALLBACK), []);
 
   const mutation = useMutation({
     mutationFn: () => api.post("/client-portal/register", {
@@ -81,11 +85,28 @@ export default function ClientSignup() {
 
   return (
     <div className="min-h-screen bg-background p-4 md:p-8">
-      <div className="max-w-5xl mx-auto space-y-6">
+      <div className="max-w-6xl mx-auto space-y-6">
         <div className="text-center space-y-2">
-          <h1 className="text-3xl font-bold text-foreground">Cadastro de Cliente ozapteconta</h1>
-          <p className="text-sm text-muted-foreground">Preencha os dados completos para ativar seu plano e conectar via QR Code</p>
+          <h1 className="text-3xl font-bold text-foreground">Cadastro ozapteconta</h1>
+          <p className="text-sm text-muted-foreground max-w-2xl mx-auto">
+            Escolha seu plano, preencha os dados e conecte pelo WhatsApp. Preços atualizados direto do sistema.
+          </p>
         </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Planos disponíveis</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Clique no plano desejado. O Travel inclui busca de voos por texto ou áudio no WhatsApp.
+            </p>
+          </CardHeader>
+          <CardContent>
+            <PlanCatalog
+              selectedPlan={form.plan}
+              onSelectPlan={(plan) => setForm({ ...form, plan })}
+            />
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader>
@@ -110,13 +131,10 @@ export default function ClientSignup() {
               <Input label="Estado (UF)" value={form.addressState} onChange={(e) => setForm({ ...form, addressState: e.target.value })} />
               <Input label="CEP" value={form.addressZipCode} onChange={(e) => setForm({ ...form, addressZipCode: e.target.value })} />
               <Select
-                label="Plano"
+                label="Plano confirmado"
                 value={form.plan}
-                onChange={(e) => setForm({ ...form, plan: e.target.value })}
-                options={[
-                  { value: "HOME", label: "Basico - R$ 4,90 (contas PF/PJ)" },
-                  { value: "FULL", label: "Completo - R$ 9,90 (todos os recursos)" },
-                ]}
+                onChange={(e) => setForm({ ...form, plan: e.target.value as PlanCode })}
+                options={planOptions}
               />
             </div>
 

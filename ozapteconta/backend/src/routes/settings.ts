@@ -4,8 +4,17 @@ import { authMiddleware } from "../middleware/auth";
 import { testProvider } from "../services/aiService";
 import { AiUsageStage, getAiUsageReport } from "../services/aiUsageMetricsService";
 import { processReminders } from "../services/reminderService";
+import recurringBillingService from "../services/recurringBillingService";
 import { whatsappQrPairingService } from "../services/whatsappQrPairingService";
 import { logger } from "../utils/logger";
+import {
+  applyProviderPriorityOrder,
+  assignNextProviderPriority,
+  ensureProviderPrioritiesMigrated,
+  moveProviderPriority,
+  removeProviderFromChain,
+  type ProviderChannel,
+} from "../services/aiProviderPriorityService";
 
 const router = Router();
 router.use(authMiddleware);
@@ -91,13 +100,59 @@ router.put("/whatsapp", async (req: Request, res: Response) => {
 
 // ─── AI Providers ─────────────────────────────────────────────────────────────
 router.get("/ai-providers", async (_req: Request, res: Response) => {
-  const providers = await prisma.aiProviderConfig.findMany({ orderBy: { id: "asc" } });
+  await ensureProviderPrioritiesMigrated();
+  const providers = await prisma.aiProviderConfig.findMany({ orderBy: [{ textPriority: "asc" }, { id: "asc" }] });
   // Mascara API keys
   const masked = providers.map((p) => ({
     ...p,
     apiKey: p.apiKey ? p.apiKey.substring(0, 8) + "..." : null,
   }));
   res.json(masked);
+});
+
+router.put("/ai-providers/reorder", async (req: Request, res: Response) => {
+  const { channel, order } = req.body as { channel?: ProviderChannel; order?: string[] };
+
+  if (channel !== "text" && channel !== "audio") {
+    res.status(400).json({ error: "Canal inválido (text ou audio)" });
+    return;
+  }
+
+  if (!Array.isArray(order) || order.length === 0) {
+    res.status(400).json({ error: "Ordem de provedores inválida" });
+    return;
+  }
+
+  try {
+    await applyProviderPriorityOrder(channel, order);
+    res.json({ success: true });
+  } catch (err) {
+    logger.error("[Settings] Erro ao reordenar provedores:", err);
+    res.status(400).json({ error: err instanceof Error ? err.message : "Erro ao reordenar" });
+  }
+});
+
+router.post("/ai-providers/:provider/move", async (req: Request, res: Response) => {
+  const provider = String(req.params.provider || "");
+  const { channel, direction } = req.body as { channel?: ProviderChannel; direction?: "up" | "down" };
+
+  if (channel !== "text" && channel !== "audio") {
+    res.status(400).json({ error: "Canal inválido (text ou audio)" });
+    return;
+  }
+
+  if (direction !== "up" && direction !== "down") {
+    res.status(400).json({ error: "Direção inválida (up ou down)" });
+    return;
+  }
+
+  try {
+    await moveProviderPriority(provider, channel, direction);
+    res.json({ success: true });
+  } catch (err) {
+    logger.error("[Settings] Erro ao mover prioridade:", err);
+    res.status(400).json({ error: err instanceof Error ? err.message : "Erro ao mover prioridade" });
+  }
 });
 
 router.put("/ai-providers/:provider", async (req: Request, res: Response) => {
@@ -111,25 +166,43 @@ router.put("/ai-providers/:provider", async (req: Request, res: Response) => {
     if (apiKey && !apiKey.includes("...")) data.apiKey = apiKey;
     if (model !== undefined) data.model = normalizeAiProviderModel(provider, model);
     if (apiUrl !== undefined) data.apiUrl = apiUrl;
-    if (enabled !== undefined) data.enabled = enabled;
+    if (enabled !== undefined) {
+      data.enabled = enabled;
+      if (enabled === false) {
+        await removeProviderFromChain(provider, "text");
+      } else if (enabled === true) {
+        const current = await prisma.aiProviderConfig.findUnique({
+          where: { provider: provider as "BUILTIN" | "OPENAI" | "GEMINI" | "GROQ" | "GROK" | "OLLAMA" | "ABACUS" },
+        });
+        if (current && current.textPriority === 0) {
+          await assignNextProviderPriority(provider, "text");
+        }
+      }
+    }
     if (isDefault !== undefined) {
       data.isDefault = isDefault;
-      // Remove default de outros provedores
       if (isDefault) {
-        await prisma.aiProviderConfig.updateMany({
-          where: { provider: { not: provider as "BUILTIN" | "OPENAI" | "GEMINI" | "GROQ" | "GROK" | "OLLAMA" | "ABACUS" } },
-          data: { isDefault: false },
+        const chain = await prisma.aiProviderConfig.findMany({
+          where: { textPriority: { gt: 0 } },
+          orderBy: { textPriority: "asc" },
         });
+        const order = chain.map((row) => row.provider);
+        const without = order.filter((item) => item !== provider);
+        await applyProviderPriorityOrder("text", [provider, ...without]);
       }
     }
     if (isAudioDefault !== undefined) {
       data.isAudioDefault = isAudioDefault;
-      // Remove padrão de áudio de outros provedores
       if (isAudioDefault) {
-        await prisma.aiProviderConfig.updateMany({
-          where: { provider: { not: provider as "BUILTIN" | "OPENAI" | "GEMINI" | "GROQ" | "GROK" | "OLLAMA" | "ABACUS" } },
-          data: { isAudioDefault: false },
+        const chain = await prisma.aiProviderConfig.findMany({
+          where: { audioPriority: { gt: 0 } },
+          orderBy: { audioPriority: "asc" },
         });
+        const order = chain.map((row) => row.provider);
+        const without = order.filter((item) => item !== provider);
+        await applyProviderPriorityOrder("audio", [provider, ...without]);
+      } else {
+        await removeProviderFromChain(provider, "audio");
       }
     }
 
@@ -318,6 +391,16 @@ router.post("/reminders/run", async (_req: Request, res: Response) => {
     const result = await processReminders();
     res.json({ success: true, ...result });
   } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.post("/billing/run", async (_req: Request, res: Response) => {
+  try {
+    const result = await recurringBillingService.runBillingNow();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    logger.error("[Settings] Erro ao executar cobrança:", err);
     res.status(500).json({ error: String(err) });
   }
 });

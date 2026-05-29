@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { prisma } from "../config/prisma";
 import { logger } from "../utils/logger";
+import { isPlausibleWhatsappPhone } from "../utils/whatsappPhoneUtils";
 
 const ALIAS_KEY_PREFIX = "wa_alias:";
 const ALIASES_KEY_PREFIX = "wa_aliases:";
@@ -81,9 +82,94 @@ async function reconcileLegacyIdentifiers(alias: string, canonical: string): Pro
       });
     }
 
-    await prisma.whatsappUser.updateMany({
-      where: { phone: { in: legacyCandidates } },
-      data: { phone: canonical },
+    await prisma.$transaction(async (tx) => {
+      const canonicalUser = await tx.whatsappUser.findUnique({
+        where: { phone: canonical },
+        select: {
+          id: true,
+          phone: true,
+          name: true,
+          conversationContext: true,
+          isActive: true,
+          totalTransactions: true,
+          registrationStep: true,
+          registrationData: true,
+        },
+      });
+
+      const legacyUsers = await tx.whatsappUser.findMany({
+        where: { phone: { in: legacyCandidates } },
+        select: {
+          id: true,
+          phone: true,
+          name: true,
+          conversationContext: true,
+          isActive: true,
+          totalTransactions: true,
+          registrationStep: true,
+          registrationData: true,
+        },
+      });
+
+      let canonicalId = canonicalUser?.id || null;
+      let mergedTotal = canonicalUser?.totalTransactions ?? 0;
+      let mergedName = canonicalUser?.name ?? null;
+      let mergedConversationContext = canonicalUser?.conversationContext ?? null;
+      let mergedRegistrationStep = canonicalUser?.registrationStep ?? null;
+      let mergedRegistrationData = canonicalUser?.registrationData ?? null;
+      let mergedIsActive = canonicalUser?.isActive ?? false;
+
+      if (!canonicalId && legacyUsers.length > 0) {
+        const first = legacyUsers[0];
+        await tx.whatsappUser.update({
+          where: { id: first.id },
+          data: { phone: canonical },
+        });
+        canonicalId = first.id;
+        mergedTotal = first.totalTransactions;
+        mergedName = first.name;
+        mergedConversationContext = first.conversationContext ?? null;
+        mergedRegistrationStep = first.registrationStep ?? null;
+        mergedRegistrationData = first.registrationData ?? null;
+        mergedIsActive = first.isActive;
+      }
+
+      for (const legacy of legacyUsers) {
+        if (legacy.id === canonicalId) continue;
+
+        await tx.financialTransaction.updateMany({
+          where: { userPhone: legacy.phone },
+          data: { userPhone: canonical },
+        });
+
+        await tx.audioMessage.updateMany({
+          where: { userPhone: legacy.phone },
+          data: { userPhone: canonical },
+        });
+
+        mergedTotal += legacy.totalTransactions;
+        mergedName = mergedName ?? legacy.name;
+        mergedConversationContext = mergedConversationContext ?? legacy.conversationContext ?? null;
+        mergedRegistrationStep = mergedRegistrationStep ?? legacy.registrationStep ?? null;
+        mergedRegistrationData = mergedRegistrationData ?? legacy.registrationData ?? null;
+        mergedIsActive = mergedIsActive || legacy.isActive;
+
+        await tx.whatsappUser.delete({ where: { id: legacy.id } });
+      }
+
+      if (canonicalId) {
+        await tx.whatsappUser.update({
+          where: { id: canonicalId },
+          data: {
+            totalTransactions: mergedTotal,
+            ...(mergedName ? { name: mergedName } : {}),
+            ...(mergedConversationContext !== null ? { conversationContext: mergedConversationContext } : {}),
+            ...(mergedRegistrationStep ? { registrationStep: mergedRegistrationStep } : {}),
+            ...(mergedRegistrationData !== null ? { registrationData: mergedRegistrationData } : {}),
+            isActive: mergedIsActive,
+          },
+        });
+      }
     });
   } catch (err) {
     logger.error("[WhatsappIdentity] Falha ao reconciliar identificadores legados", err);
@@ -94,6 +180,11 @@ export async function registerWhatsappIdentityAlias(aliasRaw: string, canonicalR
   const alias = normalizeWhatsappIdentifier(aliasRaw);
   const canonical = normalizeWhatsappIdentifier(canonicalRaw);
   if (!alias || !canonical) return;
+
+  if (alias.endsWith("@lid") && !isPlausibleWhatsappPhone(canonical)) {
+    logger.warn(`[WhatsappIdentity] Alias @lid ignorado — canonical inválido: ${canonicalRaw}`);
+    return;
+  }
 
   const aliasKey = `${ALIAS_KEY_PREFIX}${alias}`;
   const aliasesKey = `${ALIASES_KEY_PREFIX}${canonical}`;
@@ -140,15 +231,24 @@ export async function resolveWhatsappIdentity(inputRaw: string): Promise<{
 
   const strippedLid = normalized.endsWith("@lid") ? normalized.slice(0, -4) : "";
   const legacyLidAlias = normalized && !normalized.endsWith("@lid") ? `${normalized}@lid` : "";
-  let canonical = strippedLid || normalized;
+  let canonical = normalized;
 
   if (normalized.endsWith("@lid")) {
     const aliasSetting = await prisma.systemSetting.findUnique({
       where: { key: `${ALIAS_KEY_PREFIX}${normalized}` },
     });
     if (aliasSetting?.value) {
-      canonical = normalizeWhatsappIdentifier(aliasSetting.value);
+      const mapped = normalizeWhatsappIdentifier(aliasSetting.value);
+      if (isPlausibleWhatsappPhone(mapped)) {
+        canonical = mapped;
+      }
+    } else if (isPlausibleWhatsappPhone(strippedLid)) {
+      canonical = strippedLid;
+    } else {
+      canonical = normalized;
     }
+  } else if (isPlausibleWhatsappPhone(normalized)) {
+    canonical = normalized;
   }
 
   const aliasKeys = uniq([
@@ -178,6 +278,14 @@ export async function resolveWhatsappIdentity(inputRaw: string): Promise<{
     await prisma.systemSetting.create({
       data: { key: hashKey, value: identityHash },
     }).catch(() => null);
+  }
+
+  if (
+    !canonical.endsWith("@lid") &&
+    !isPlausibleWhatsappPhone(canonical) &&
+    canonical.length >= 14
+  ) {
+    canonical = `${canonical}@lid`;
   }
 
   return {

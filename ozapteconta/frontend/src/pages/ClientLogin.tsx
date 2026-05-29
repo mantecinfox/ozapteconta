@@ -55,8 +55,11 @@ export default function ClientLogin() {
             Entrar no painel
           </Button>
 
-          <p className="text-xs text-muted-foreground">
-            Este painel permite consultar, filtrar e pesquisar dados financeiros. Edição e exclusão não são permitidas.
+          <p className="text-xs text-muted-foreground text-center">
+            Ainda não tem cadastro?{" "}
+            <a href="/cliente/cadastro" className="text-primary hover:underline">
+              Ver planos e assinar
+            </a>
           </p>
         </CardContent>
       </Card>

@@ -1,284 +1,650 @@
-﻿import React, { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Trash2, RefreshCw, QrCode, CheckCircle, Users, UserCheck, Clock, UserX, TrendingUp, DollarSign, AlertTriangle } from "lucide-react";
-import { PieChart, Pie, Cell, Legend, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
-import api, { ClientProfile } from "@/lib/api";
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Skeleton } from "@/components/ui";
+﻿import React, { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import {
+  Users, UserCheck, AlertTriangle, Clock, DollarSign,
+  ChevronDown, ChevronUp, Search, RefreshCw, Trash2,
+} from "lucide-react";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, PieChart, Pie, Cell, Legend,
+  LineChart, Line, AreaChart, Area,
+} from "recharts";
+import api from "@/lib/api";
+import { Card, CardContent, CardHeader, CardTitle, Badge, Skeleton, Button, Input, Select } from "@/components/ui";
+import {
+  formatBRL, PLAN_COLORS, PLAN_LABELS, PIE_COLORS,
+  CLIENT_STATUS_MAP, SUB_STATUS_MAP, PAYMENT_STATUS_MAP,
+  SERVICE_LABELS, SERVICE_COLORS, GENDER_LABELS, formatPhone,
+} from "@/lib/clientUtils";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
-interface ClientsResponse { clients: ClientProfile[]; total: number; page: number; }
-interface ClientMetrics {
-  totalClients: number; activeClients: number; pendingClients: number; inactiveClients: number;
-  newThisMonth: number; mrr: number; byPlan: Record<string, number>;
-  growthLast6Months: Array<{ month: string; novos: number }>;
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface ClientRow {
+  id: number;
+  fullName: string;
+  phone: string;
+  email: string | null;
+  clientType: string;
+  gender: string | null;
+  cpf: string | null;
+  cnpj: string | null;
+  plan: string;
+  status: string;
+  activatedAt: string | null;
+  createdAt: string;
+  addressStreet: string;
+  addressNumber: string;
+  addressComplement: string | null;
+  addressNeighborhood: string;
+  addressCity: string;
+  addressState: string;
+  addressZipCode: string;
+  subscription: {
+    id: number;
+    status: string;
+    plan: string;
+    priceMonthly: number;
+    nextBillingDate: string | null;
+    lastBillingDate: string | null;
+  } | null;
 }
 
-function formatBRL(v: number) { return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v); }
+interface AnalyticsOverview {
+  inadimplentes: { id: number; fullName: string; daysOverdue: number; amount: number }[];
+  proximosVencimento: { id: number; fullName: string; daysRemaining: number; amount: number }[];
+  serviceDistribution: { service: string; count: number }[];
+  peakHoursGlobal: { hour: number; count: number }[];
+  demographicBreakdown: { label: string; count: number }[];
+  growthTrend: { month: string; count: number }[];
+}
 
-const PLAN_COLORS: Record<string, string> = { HOME: "#3b82f6", OFFICE: "#64748b", FULL: "#f59e0b" };
-const PLAN_LABELS: Record<string, string> = { HOME: "Basico (R$ 4,90)", OFFICE: "Legacy Office", FULL: "Completo (R$ 9,90)" };
-const STATUS_PIE_COLORS = ["#22c55e", "#f59e0b", "#94a3b8"];
+interface ClientAnalytics {
+  serviceUsage: { last30Days: { service: string; count: number }[]; last90Days: { service: string; count: number }[] };
+  peakHours: { hour: number; count: number }[];
+  usageTrend: { date: string; count: number }[];
+  topServices: { service: string; count: number }[];
+  subscriptionInfo: {
+    status: string; plan: string; priceMonthly: number;
+    nextBillingDate: string | null; lastBillingDate: string | null;
+    daysRemaining: number | null; daysOfUse: number;
+  } | null;
+  paymentHistory: { id: number; amount: number; status: string; paymentMethod: string | null; chargedAt: string | null; createdAt: string }[];
+  totalInteractions: number;
+  avgPerDay: number;
+  demographics: { gender: string | null; clientType: string };
+}
+
+interface ClientMetrics {
+  totalClients: number;
+  activeClients: number;
+  pendingClients: number;
+  inactiveClients: number;
+  newThisMonth: number;
+  mrr: number;
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export default function Clients() {
-  const qc = useQueryClient();
-  const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
-  const [clientToDelete, setClientToDelete] = useState<ClientProfile | null>(null);
-  const [deleteConfirmationName, setDeleteConfirmationName] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [planFilter, setPlanFilter] = useState("all");
+  const [page, setPage] = useState(1);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<"dados" | "financeiro" | "uso" | "relatorio">("dados");
+  const perPage = 15;
 
-  const { data, isLoading } = useQuery({
-    queryKey: ["clients", page, search],
-    queryFn: () => api.get("/clients", { params: { page, search } }).then((r) => r.data as ClientsResponse),
-  });
-
-  const { data: metrics, isLoading: metricsLoading } = useQuery<ClientMetrics>({
-    queryKey: ["admin-metrics"],
+  const { data: metrics, isLoading: loadingMetrics } = useQuery<ClientMetrics>({
+    queryKey: ["client-metrics"],
     queryFn: () => api.get("/clients/metrics").then((r) => r.data),
-    staleTime: 60000,
+    refetchInterval: 60000,
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: ({ id, confirmationName }: { id: number; confirmationName: string }) =>
-      api.delete(`/clients/${id}`, {
-        data: {
-          confirmDelete: true,
-          confirmationName,
-        },
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["clients"] });
-      qc.invalidateQueries({ queryKey: ["admin-metrics"] });
-      setClientToDelete(null);
-      setDeleteConfirmationName("");
-    },
-  });
-  const activateMutation = useMutation({
-    mutationFn: (id: number) => api.post(`/clients/${id}/activate`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["clients"] }); qc.invalidateQueries({ queryKey: ["admin-metrics"] }); },
-  });
-  const regenerateMutation = useMutation({
-    mutationFn: (id: number) => api.post(`/clients/${id}/regenerate-qr`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["clients"] }),
+  const { data: overview, isLoading: loadingOverview } = useQuery<AnalyticsOverview>({
+    queryKey: ["client-analytics-overview"],
+    queryFn: () => api.get("/clients/analytics/overview").then((r) => r.data),
+    refetchInterval: 120000,
   });
 
-  const totalPages = useMemo(() => Math.max(1, Math.ceil((data?.total || 0) / 20)), [data?.total]);
+  const { data: clientsData, isLoading: loadingClients, refetch } = useQuery<{ clients: ClientRow[]; total: number }>({
+    queryKey: ["clients-list", page, search, statusFilter, planFilter],
+    queryFn: () =>
+      api.get("/clients", { params: { page, limit: perPage, search, status: statusFilter !== "all" ? statusFilter : undefined, plan: planFilter !== "all" ? planFilter : undefined } })
+        .then((r) => r.data),
+  });
 
-  const planPieData = metrics ? Object.entries(metrics.byPlan).map(([plan, count]) => ({ name: PLAN_LABELS[plan] || plan, value: count, plan })) : [];
-  const statusPieData = metrics ? [{ name: "Ativos", value: metrics.activeClients }, { name: "Pendentes", value: metrics.pendingClients }, { name: "Inativos", value: metrics.inactiveClients }].filter((d) => d.value > 0) : [];
+  const clients = clientsData?.clients || [];
+  const totalPages = Math.ceil((clientsData?.total || 0) / perPage);
 
-  const statusColor = (s: string) => s === "ACTIVE" ? "success" : s === "INACTIVE" ? "secondary" : "warning";
-  const statusLabel = (s: string) => s === "ACTIVE" ? "Ativo" : s === "INACTIVE" ? "Inativo" : "Aguard.";
-  const canConfirmDelete = clientToDelete != null && deleteConfirmationName.trim() === clientToDelete.fullName;
+  const inadimplenteCount = overview?.inadimplentes?.length || 0;
+  const aVencerCount = overview?.proximosVencimento?.length || 0;
+
+  // KPIs
+  const kpis = [
+    { title: "Total Clientes", value: metrics?.totalClients, icon: Users, color: "text-primary", bg: "bg-primary/10" },
+    { title: "Ativos", value: metrics?.activeClients, icon: UserCheck, color: "text-green-600", bg: "bg-green-50 dark:bg-green-950/30" },
+    { title: "Inadimplentes", value: inadimplenteCount, icon: AlertTriangle, color: "text-red-600", bg: "bg-red-50 dark:bg-red-950/30" },
+    { title: "A Vencer (7d)", value: aVencerCount, icon: Clock, color: "text-amber-600", bg: "bg-amber-50 dark:bg-amber-950/30" },
+    { title: "MRR", value: metrics ? formatBRL(metrics.mrr) : undefined, icon: DollarSign, color: "text-green-600", bg: "bg-green-50 dark:bg-green-950/30" },
+  ];
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">Clientes</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">Visão geral e gestão dos seus clientes</p>
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Gestão de Clientes</h1>
+        <Button variant="outline" size="sm" onClick={() => refetch()}>
+          <RefreshCw className="h-4 w-4 mr-1" /> Atualizar
+        </Button>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-        {[
-          { icon: Users, label: "Total", value: metrics?.totalClients, color: "text-primary", bg: "bg-primary/10" },
-          { icon: UserCheck, label: "Ativos", value: metrics?.activeClients, color: "text-success", bg: "bg-success/10" },
-          { icon: Clock, label: "Aguardando", value: metrics?.pendingClients, color: "text-warning", bg: "bg-warning/10" },
-          { icon: TrendingUp, label: "Novos no Mês", value: metrics?.newThisMonth, color: "text-primary", bg: "bg-primary/10" },
-          { icon: UserX, label: "Inativos", value: metrics?.inactiveClients, color: "text-muted-foreground", bg: "bg-secondary" },
-          { icon: DollarSign, label: "MRR", value: metrics != null ? formatBRL(metrics.mrr) : undefined, color: "text-success", bg: "bg-success/10" },
-        ].map((c) => (
-          <Card key={c.label} className="border border-border/50">
-            <CardContent className="p-4 flex items-center gap-3">
-              <div className={`p-2 rounded-lg shrink-0 ${c.bg}`}><c.icon className={`w-4 h-4 ${c.color}`} /></div>
-              <div>
-                {metricsLoading ? <Skeleton className="h-5 w-12" /> : <p className="text-lg font-bold text-foreground">{c.value != null ? String(c.value) : "—"}</p>}
-                <p className="text-xs text-muted-foreground">{c.label}</p>
+      {/* KPIs */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        {kpis.map((kpi) => (
+          <Card key={kpi.title} className={`${kpi.bg} border-0`}>
+            <CardContent className="p-4">
+              <div className="flex items-center gap-2 mb-1">
+                <kpi.icon className={`h-4 w-4 ${kpi.color}`} />
+                <span className="text-xs text-muted-foreground">{kpi.title}</span>
               </div>
+              <p className={`text-xl font-bold ${kpi.color}`}>
+                {loadingMetrics ? <Skeleton className="h-6 w-16" /> : (kpi.value ?? "—")}
+              </p>
             </CardContent>
           </Card>
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card className="lg:col-span-2">
-          <CardHeader><CardTitle>Novos Clientes — Últimos 6 Meses</CardTitle></CardHeader>
-          <CardContent>
-            {(metrics?.growthLast6Months?.length || 0) > 0 ? (
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={metrics!.growthLast6Months} barSize={28}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="month" stroke="hsl(var(--muted-foreground))" tick={{ fontSize: 11 }} />
-                  <YAxis stroke="hsl(var(--muted-foreground))" tick={{ fontSize: 11 }} allowDecimals={false} />
-                  <Tooltip formatter={(v: number) => [v, "Novos"]} contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px" }} labelStyle={{ color: "hsl(var(--foreground))" }} />
-                  <Bar dataKey="novos" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
+      {/* Gráficos Gerais */}
+      {!loadingOverview && overview && (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+          {/* Uso por Serviço */}
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">Uso por Serviço (30d)</CardTitle></CardHeader>
+            <CardContent className="h-52">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={overview.serviceDistribution.slice(0, 8).map((s) => ({ name: SERVICE_LABELS[s.service] || s.service, count: s.count, fill: SERVICE_COLORS[s.service] || "#6366f1" }))}>
+                  <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                  <XAxis dataKey="name" tick={{ fontSize: 10 }} angle={-20} textAnchor="end" height={50} />
+                  <YAxis tick={{ fontSize: 10 }} />
+                  <Tooltip />
+                  <Bar dataKey="count" name="Uso" radius={[4, 4, 0, 0]}>
+                    {overview.serviceDistribution.slice(0, 8).map((s, i) => (
+                      <Cell key={i} fill={SERVICE_COLORS[s.service] || PIE_COLORS[i % PIE_COLORS.length]} />
+                    ))}
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
-            ) : <div className="h-[200px] flex items-center justify-center text-muted-foreground text-sm">{metricsLoading ? "Carregando..." : "Sem dados"}</div>}
-          </CardContent>
-        </Card>
-        <div className="space-y-4">
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">Por Plano</CardTitle></CardHeader>
-            <CardContent>
-              {planPieData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={150}>
-                  <PieChart>
-                    <Pie data={planPieData} cx="50%" cy="50%" innerRadius={35} outerRadius={55} paddingAngle={3} dataKey="value">
-                      {planPieData.map((entry) => <Cell key={entry.plan} fill={PLAN_COLORS[entry.plan] || "#94a3b8"} />)}
-                    </Pie>
-                    <Tooltip formatter={(v: number) => [v, "clientes"]} contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px" }} />
-                    <Legend formatter={(v) => <span style={{ color: "hsl(var(--muted-foreground))", fontSize: "11px" }}>{v}</span>} />
-                  </PieChart>
-                </ResponsiveContainer>
-              ) : <div className="h-[150px] flex items-center justify-center text-muted-foreground text-sm">Sem dados</div>}
             </CardContent>
           </Card>
+
+          {/* Demografia */}
           <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">Por Status</CardTitle></CardHeader>
-            <CardContent>
-              {statusPieData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={130}>
-                  <PieChart>
-                    <Pie data={statusPieData} cx="50%" cy="50%" outerRadius={48} paddingAngle={3} dataKey="value">
-                      {statusPieData.map((_, i) => <Cell key={i} fill={STATUS_PIE_COLORS[i % STATUS_PIE_COLORS.length]} />)}
-                    </Pie>
-                    <Tooltip formatter={(v: number) => [v, "clientes"]} contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px" }} />
-                    <Legend formatter={(v) => <span style={{ color: "hsl(var(--muted-foreground))", fontSize: "11px" }}>{v}</span>} />
-                  </PieChart>
-                </ResponsiveContainer>
-              ) : <div className="h-[130px] flex items-center justify-center text-muted-foreground text-sm">Sem dados</div>}
+            <CardHeader className="pb-2"><CardTitle className="text-sm">Perfil dos Clientes</CardTitle></CardHeader>
+            <CardContent className="h-52">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={overview.demographicBreakdown.filter((d) => d.count > 0)} dataKey="count" nameKey="label" cx="50%" cy="50%" outerRadius={70} label={({ label, count }) => `${label}: ${count}`}>
+                    {overview.demographicBreakdown.filter((d) => d.count > 0).map((_, i) => (
+                      <Cell key={i} fill={["#3b82f6", "#ec4899", "#8b5cf6"][i]} />
+                    ))}
+                  </Pie>
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+
+          {/* Crescimento */}
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">Novos Clientes/Mês</CardTitle></CardHeader>
+            <CardContent className="h-52">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={overview.growthTrend}>
+                  <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                  <XAxis dataKey="month" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 10 }} />
+                  <Tooltip />
+                  <Line type="monotone" dataKey="count" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+
+          {/* Horários de Pico */}
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">Horários de Pico</CardTitle></CardHeader>
+            <CardContent className="h-52">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={overview.peakHoursGlobal}>
+                  <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                  <XAxis dataKey="hour" tick={{ fontSize: 10 }} tickFormatter={(h) => `${h}h`} />
+                  <YAxis tick={{ fontSize: 10 }} />
+                  <Tooltip labelFormatter={(h) => `${h}:00`} />
+                  <Area type="monotone" dataKey="count" stroke="#8b5cf6" fill="#8b5cf6" fillOpacity={0.2} />
+                </AreaChart>
+              </ResponsiveContainer>
             </CardContent>
           </Card>
         </div>
-      </div>
+      )}
 
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <CardTitle>Lista de clientes{data?.total != null && <span className="text-sm font-normal text-muted-foreground ml-1">({data.total})</span>}</CardTitle>
-            <div className="w-full max-w-sm">
-              <Input placeholder="Buscar por nome, telefone, email ou CPF/CNPJ" value={search} onChange={(e) => { setPage(1); setSearch(e.target.value); }} />
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {isLoading && <p className="text-sm text-muted-foreground">Carregando clientes...</p>}
-          {!isLoading && data?.clients?.length === 0 && (
-            <p className="text-sm text-muted-foreground">Nenhum cliente encontrado. Os cadastros feitos pelo WhatsApp aparecem aqui automaticamente.</p>
+      {/* Listas de Inadimplentes e A Vencer */}
+      {overview && (inadimplenteCount > 0 || aVencerCount > 0) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {inadimplenteCount > 0 && (
+            <Card className="border-red-200 dark:border-red-900">
+              <CardHeader className="pb-2"><CardTitle className="text-sm text-red-600">Inadimplentes ({inadimplenteCount})</CardTitle></CardHeader>
+              <CardContent className="max-h-48 overflow-y-auto space-y-1">
+                {overview.inadimplentes.slice(0, 10).map((c) => (
+                  <div key={c.id} className="flex justify-between text-sm py-1 border-b border-border/50 last:border-0">
+                    <span className="font-medium truncate">{c.fullName}</span>
+                    <span className="text-red-600 whitespace-nowrap">{c.daysOverdue}d atraso • {formatBRL(c.amount)}</span>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
           )}
-          {data?.clients?.map((client) => (
-            <div key={client.id} className="rounded-lg border border-border/50 p-3 space-y-2">
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <div>
-                  <p className="font-semibold text-foreground">{client.fullName}<span className="ml-2 text-xs text-muted-foreground font-normal">{client.clientType === "PJ" ? "PJ" : "PF"}</span></p>
-                  <p className="text-xs text-muted-foreground">
-                    📱 {client.phone}{client.email ? ` · ✉️ ${client.email}` : ""}{client.cpf ? ` · CPF: ${client.cpf}` : ""}{client.cnpj ? ` · CNPJ: ${client.cnpj}` : ""}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-0.5">Cadastro: {format(new Date(client.createdAt), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}</p>
-                </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Badge variant={statusColor(client.status) as "success" | "secondary" | "warning"}>{statusLabel(client.status)}</Badge>
-                  <Badge variant="outline" style={{ borderColor: PLAN_COLORS[client.plan], color: PLAN_COLORS[client.plan] }}>{PLAN_LABELS[client.plan] || client.plan}</Badge>
-                  {client.subscription && <Badge variant={client.subscription.status === "ACTIVE" ? "success" : "warning"}>Sub: {client.subscription.status === "ACTIVE" ? "Ativa" : "Pendente"}</Badge>}
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                📍 {client.addressStreet}, {client.addressNumber}{client.addressComplement ? `, ${client.addressComplement}` : ""}{client.addressNeighborhood ? ` — ${client.addressNeighborhood}` : ""}, {client.addressCity}/{client.addressState}{client.addressZipCode ? ` · CEP ${client.addressZipCode}` : ""}
-              </p>
-              <div className="flex flex-wrap gap-2 pt-1">
-                {client.status === "PENDING_ACTIVATION" && (
-                  <Button size="sm" variant="default" loading={activateMutation.isPending} onClick={() => activateMutation.mutate(client.id)}><CheckCircle className="w-3.5 h-3.5" />Ativar</Button>
-                )}
-                <Button size="sm" variant="outline" loading={regenerateMutation.isPending} onClick={() => regenerateMutation.mutate(client.id)}><RefreshCw className="w-3.5 h-3.5" />Novo QR</Button>
-                <a href={`/cliente/qr/${client.qrToken}`} target="_blank" rel="noreferrer" className="inline-flex">
-                  <Button size="sm" variant="outline"><QrCode className="w-3.5 h-3.5" />Ver QR</Button>
-                </a>
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  loading={deleteMutation.isPending && clientToDelete?.id === client.id}
-                  onClick={() => {
-                    setClientToDelete(client);
-                    setDeleteConfirmationName("");
-                  }}
-                >
-                  <Trash2 className="w-3.5 h-3.5" />Excluir
-                </Button>
-              </div>
+          {aVencerCount > 0 && (
+            <Card className="border-amber-200 dark:border-amber-900">
+              <CardHeader className="pb-2"><CardTitle className="text-sm text-amber-600">A Vencer em 7 dias ({aVencerCount})</CardTitle></CardHeader>
+              <CardContent className="max-h-48 overflow-y-auto space-y-1">
+                {overview.proximosVencimento.slice(0, 10).map((c) => (
+                  <div key={c.id} className="flex justify-between text-sm py-1 border-b border-border/50 last:border-0">
+                    <span className="font-medium truncate">{c.fullName}</span>
+                    <span className="text-amber-600 whitespace-nowrap">{c.daysRemaining}d • {formatBRL(c.amount)}</span>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {/* Filtros */}
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input placeholder="Buscar por nome, telefone ou email..." value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className="pl-9" />
             </div>
-          ))}
-          <div className="flex items-center justify-between pt-2">
-            <p className="text-xs text-muted-foreground">{data?.total || 0} clientes</p>
-            <div className="flex items-center gap-2">
-              <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Anterior</Button>
-              <span className="text-xs text-muted-foreground">Página {page} / {totalPages}</span>
-              <Button size="sm" variant="outline" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Próxima</Button>
-            </div>
+            <Select
+              value={statusFilter}
+              onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+              options={[
+                { value: "all", label: "Todos status" },
+                { value: "ACTIVE", label: "Ativos" },
+                { value: "PENDING_ACTIVATION", label: "Aguardando" },
+                { value: "INACTIVE", label: "Inativos" },
+              ]}
+            />
+            <Select
+              value={planFilter}
+              onChange={(e) => { setPlanFilter(e.target.value); setPage(1); }}
+              options={[
+                { value: "all", label: "Todos planos" },
+                { value: "HOME", label: "Básico" },
+                { value: "OFFICE", label: "Office" },
+                { value: "FULL", label: "Completo" },
+                { value: "TRAVEL", label: "Travel" },
+              ]}
+            />
           </div>
         </CardContent>
       </Card>
 
-      {clientToDelete && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm p-4 flex items-center justify-center">
-          <div className="w-full max-w-lg rounded-2xl border border-border bg-card shadow-2xl">
-            <div className="p-5 border-b border-border/60 flex items-start gap-3">
-              <div className="shrink-0 rounded-xl bg-destructive/10 p-2">
-                <AlertTriangle className="w-5 h-5 text-destructive" />
+      {/* Lista de Clientes */}
+      <Card>
+        <CardContent className="p-0">
+          {loadingClients ? (
+            <div className="p-6 space-y-3">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
+          ) : clients.length === 0 ? (
+            <div className="p-8 text-center text-muted-foreground">Nenhum cliente encontrado.</div>
+          ) : (
+            <div className="divide-y divide-border">
+              {/* Header */}
+              <div className="hidden md:grid grid-cols-[1fr_140px_80px_100px_80px_120px_40px] gap-2 px-4 py-2 text-xs font-medium text-muted-foreground bg-muted/50">
+                <span>Nome</span>
+                <span>Telefone</span>
+                <span>Plano</span>
+                <span>Status Pgto</span>
+                <span>Dias</span>
+                <span>Serviço Top</span>
+                <span></span>
               </div>
-              <div>
-                <h3 className="text-lg font-semibold text-foreground">Confirmar exclusão definitiva</h3>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Esta ação vai excluir o cliente, transações, lembretes, áudios, usuário do WhatsApp, assinatura e arquivos armazenados.
-                </p>
-              </div>
-            </div>
-
-            <div className="p-5 space-y-4">
-              <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm text-foreground">
-                <p><strong>Cliente:</strong> {clientToDelete.fullName}</p>
-                <p><strong>Telefone:</strong> {clientToDelete.phone}</p>
-                <p><strong>Plano:</strong> {PLAN_LABELS[clientToDelete.plan] || clientToDelete.plan}</p>
-              </div>
-
-              <div className="space-y-2">
-                <p className="text-sm text-foreground">
-                  Para confirmar, digite exatamente o nome do cliente:
-                </p>
-                <p className="text-sm font-semibold text-foreground">{clientToDelete.fullName}</p>
-                <Input
-                  value={deleteConfirmationName}
-                  onChange={(e) => setDeleteConfirmationName(e.target.value)}
-                  placeholder="Digite o nome completo para confirmar"
+              {clients.map((client) => (
+                <ClientRow
+                  key={client.id}
+                  client={client}
+                  expanded={expandedId === client.id}
+                  activeTab={activeTab}
+                  onToggle={() => { setExpandedId(expandedId === client.id ? null : client.id); setActiveTab("dados"); }}
+                  onTabChange={setActiveTab}
                 />
-              </div>
+              ))}
             </div>
+          )}
+        </CardContent>
+      </Card>
 
-            <div className="p-5 border-t border-border/60 flex items-center justify-end gap-2">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  if (deleteMutation.isPending) return;
-                  setClientToDelete(null);
-                  setDeleteConfirmationName("");
-                }}
-              >
-                Cancelar
-              </Button>
-              <Button
-                variant="destructive"
-                disabled={!canConfirmDelete}
-                loading={deleteMutation.isPending}
-                onClick={() => {
-                  if (!clientToDelete) return;
-                    deleteMutation.mutate({
-                      id: clientToDelete.id,
-                      confirmationName: deleteConfirmationName.trim(),
-                    });
-                }}
-              >
-                Excluir definitivamente
-              </Button>
-            </div>
+      {/* Paginação */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-2">
+          <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>Anterior</Button>
+          <span className="text-sm text-muted-foreground">Página {page} / {totalPages}</span>
+          <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage(page + 1)}>Próxima</Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Client Row (expandível) ──────────────────────────────────────────────────
+
+function ClientRow({ client, expanded, activeTab, onToggle, onTabChange }: {
+  client: ClientRow;
+  expanded: boolean;
+  activeTab: "dados" | "financeiro" | "uso" | "relatorio";
+  onToggle: () => void;
+  onTabChange: (tab: "dados" | "financeiro" | "uso" | "relatorio") => void;
+}) {
+  const subStatus = client.subscription?.status || "—";
+  const subMeta = SUB_STATUS_MAP[subStatus];
+  const daysRemaining = client.subscription?.nextBillingDate
+    ? Math.round((new Date(client.subscription.nextBillingDate).getTime() - Date.now()) / (24 * 60 * 60 * 1000))
+    : null;
+
+  return (
+    <div>
+      <div className="grid grid-cols-1 md:grid-cols-[1fr_140px_80px_100px_80px_120px_40px] gap-2 px-4 py-3 items-center cursor-pointer hover:bg-muted/30 transition-colors" onClick={onToggle}>
+        <div>
+          <p className="font-medium text-sm">{client.fullName}</p>
+          <p className="text-xs text-muted-foreground md:hidden">{formatPhone(client.phone)}</p>
+        </div>
+        <span className="hidden md:block text-sm">{formatPhone(client.phone)}</span>
+        <Badge variant="outline" className="w-fit" style={{ borderColor: PLAN_COLORS[client.plan], color: PLAN_COLORS[client.plan] }}>
+          {PLAN_LABELS[client.plan] || client.plan}
+        </Badge>
+        {subMeta ? <Badge variant={subMeta.color}>{subMeta.label}</Badge> : <span className="text-xs text-muted-foreground">—</span>}
+        <span className={`text-sm font-medium ${daysRemaining !== null && daysRemaining < 0 ? "text-red-600" : daysRemaining !== null && daysRemaining <= 3 ? "text-amber-600" : ""}`}>
+          {daysRemaining !== null ? `${daysRemaining}d` : "—"}
+        </span>
+        <span className="text-xs text-muted-foreground truncate">—</span>
+        {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+      </div>
+
+      {expanded && <ClientDetail client={client} activeTab={activeTab} onTabChange={onTabChange} />}
+    </div>
+  );
+}
+
+// ─── Client Detail Panel ──────────────────────────────────────────────────────
+
+function ClientDetail({ client, activeTab, onTabChange }: {
+  client: ClientRow;
+  activeTab: "dados" | "financeiro" | "uso" | "relatorio";
+  onTabChange: (tab: "dados" | "financeiro" | "uso" | "relatorio") => void;
+}) {
+  const { data: analytics, isLoading } = useQuery<ClientAnalytics>({
+    queryKey: ["client-analytics", client.id],
+    queryFn: () => api.get(`/clients/${client.id}/analytics`).then((r) => r.data),
+    staleTime: 30000,
+  });
+
+  const tabs = [
+    { key: "dados" as const, label: "Dados" },
+    { key: "financeiro" as const, label: "Financeiro" },
+    { key: "uso" as const, label: "Uso de Serviços" },
+    { key: "relatorio" as const, label: "Relatório" },
+  ];
+
+  return (
+    <div className="border-t border-border bg-muted/20 px-4 py-4">
+      {/* Tabs */}
+      <div className="flex gap-1 mb-4 border-b border-border pb-2">
+        {tabs.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => onTabChange(tab.key)}
+            className={`px-3 py-1.5 text-sm rounded-t transition-colors ${activeTab === tab.key ? "bg-background border border-b-0 border-border font-medium" : "text-muted-foreground hover:text-foreground"}`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {isLoading ? (
+        <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
+      ) : (
+        <>
+          {activeTab === "dados" && <TabDados client={client} analytics={analytics} />}
+          {activeTab === "financeiro" && <TabFinanceiro analytics={analytics} />}
+          {activeTab === "uso" && <TabUso analytics={analytics} />}
+          {activeTab === "relatorio" && <TabRelatorio analytics={analytics} />}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Tab: Dados ───────────────────────────────────────────────────────────────
+
+function TabDados({ client, analytics }: { client: ClientRow; analytics?: ClientAnalytics | null }) {
+  const statusMeta = CLIENT_STATUS_MAP[client.status];
+  const genderLabel = client.gender ? GENDER_LABELS[client.gender] || client.gender : "Não informado";
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
+      <div><span className="text-muted-foreground">Nome:</span> <strong>{client.fullName}</strong></div>
+      <div><span className="text-muted-foreground">Telefone:</span> <strong>{formatPhone(client.phone)}</strong></div>
+      <div><span className="text-muted-foreground">Email:</span> <strong>{client.email || "—"}</strong></div>
+      <div><span className="text-muted-foreground">Tipo:</span> <strong>{client.clientType === "PJ" ? "Pessoa Jurídica" : "Pessoa Física"}</strong></div>
+      <div><span className="text-muted-foreground">Gênero:</span> <strong>{genderLabel}</strong></div>
+      <div><span className="text-muted-foreground">{client.clientType === "PJ" ? "CNPJ" : "CPF"}:</span> <strong>{client.cnpj || client.cpf || "—"}</strong></div>
+      <div><span className="text-muted-foreground">Plano:</span> <Badge variant="outline" style={{ borderColor: PLAN_COLORS[client.plan] }}>{PLAN_LABELS[client.plan]}</Badge></div>
+      <div><span className="text-muted-foreground">Status:</span> {statusMeta ? <Badge variant={statusMeta.color}>{statusMeta.label}</Badge> : client.status}</div>
+      <div><span className="text-muted-foreground">Cadastro:</span> <strong>{format(new Date(client.createdAt), "dd/MM/yyyy", { locale: ptBR })}</strong></div>
+      <div className="md:col-span-2 lg:col-span-3">
+        <span className="text-muted-foreground">Endereço:</span>{" "}
+        <strong>{client.addressStreet}, {client.addressNumber}{client.addressComplement ? ` - ${client.addressComplement}` : ""} — {client.addressNeighborhood}, {client.addressCity}/{client.addressState} - CEP {client.addressZipCode}</strong>
+      </div>
+      {client.activatedAt && (
+        <div><span className="text-muted-foreground">Ativado em:</span> <strong>{format(new Date(client.activatedAt), "dd/MM/yyyy", { locale: ptBR })}</strong></div>
+      )}
+    </div>
+  );
+}
+
+// ─── Tab: Financeiro ──────────────────────────────────────────────────────────
+
+function TabFinanceiro({ analytics }: { analytics?: ClientAnalytics | null }) {
+  if (!analytics) return <p className="text-muted-foreground text-sm">Sem dados.</p>;
+
+  const sub = analytics.subscriptionInfo;
+
+  return (
+    <div className="space-y-4">
+      {sub && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+          <div className="p-3 rounded bg-background border">
+            <p className="text-muted-foreground text-xs">Status</p>
+            <Badge variant={SUB_STATUS_MAP[sub.status]?.color || "secondary"}>{SUB_STATUS_MAP[sub.status]?.label || sub.status}</Badge>
+          </div>
+          <div className="p-3 rounded bg-background border">
+            <p className="text-muted-foreground text-xs">Valor Mensal</p>
+            <p className="font-bold">{formatBRL(sub.priceMonthly)}</p>
+          </div>
+          <div className="p-3 rounded bg-background border">
+            <p className="text-muted-foreground text-xs">Dias Restantes</p>
+            <p className={`font-bold ${(sub.daysRemaining ?? 0) < 0 ? "text-red-600" : (sub.daysRemaining ?? 0) <= 3 ? "text-amber-600" : ""}`}>
+              {sub.daysRemaining !== null ? `${sub.daysRemaining} dias` : "—"}
+            </p>
+          </div>
+          <div className="p-3 rounded bg-background border">
+            <p className="text-muted-foreground text-xs">Tempo de Uso</p>
+            <p className="font-bold">{sub.daysOfUse} dias</p>
+          </div>
+        </div>
+      )}
+
+      <div>
+        <h4 className="text-sm font-medium mb-2">Histórico de Pagamentos</h4>
+        {analytics.paymentHistory.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Nenhum pagamento registrado.</p>
+        ) : (
+          <div className="border rounded divide-y max-h-60 overflow-y-auto">
+            {analytics.paymentHistory.map((p) => {
+              const meta = PAYMENT_STATUS_MAP[p.status];
+              return (
+                <div key={p.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                  <div>
+                    <span className="font-medium">{formatBRL(p.amount)}</span>
+                    {p.paymentMethod && <span className="text-muted-foreground ml-2 text-xs">{p.paymentMethod}</span>}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={meta?.color || "secondary"}>{meta?.label || p.status}</Badge>
+                    <span className="text-xs text-muted-foreground">{p.chargedAt ? format(new Date(p.chargedAt), "dd/MM/yy") : "—"}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Tab: Uso de Serviços ─────────────────────────────────────────────────────
+
+function TabUso({ analytics }: { analytics?: ClientAnalytics | null }) {
+  if (!analytics) return <p className="text-muted-foreground text-sm">Sem dados.</p>;
+
+  const chartData = analytics.serviceUsage.last30Days.map((s) => ({
+    name: SERVICE_LABELS[s.service] || s.service,
+    count: s.count,
+    fill: SERVICE_COLORS[s.service] || "#6366f1",
+  }));
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Barras de uso */}
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm">Serviços (últimos 30 dias)</CardTitle></CardHeader>
+          <CardContent className="h-52">
+            {chartData.length === 0 ? (
+              <p className="text-sm text-muted-foreground pt-8 text-center">Sem interações registradas ainda.</p>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData} layout="vertical">
+                  <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                  <XAxis type="number" tick={{ fontSize: 10 }} />
+                  <YAxis type="category" dataKey="name" tick={{ fontSize: 10 }} width={100} />
+                  <Tooltip />
+                  <Bar dataKey="count" radius={[0, 4, 4, 0]}>
+                    {chartData.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Horários de pico */}
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm">Horários de Uso</CardTitle></CardHeader>
+          <CardContent className="h-52">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={analytics.peakHours}>
+                <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                <XAxis dataKey="hour" tick={{ fontSize: 10 }} tickFormatter={(h) => `${h}h`} />
+                <YAxis tick={{ fontSize: 10 }} />
+                <Tooltip labelFormatter={(h) => `${h}:00`} />
+                <Area type="monotone" dataKey="count" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.2} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Tendência diária */}
+      <Card>
+        <CardHeader className="pb-2"><CardTitle className="text-sm">Tendência de Uso (30 dias)</CardTitle></CardHeader>
+        <CardContent className="h-40">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={analytics.usageTrend}>
+              <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+              <XAxis dataKey="date" tick={{ fontSize: 9 }} tickFormatter={(d) => d.slice(5)} />
+              <YAxis tick={{ fontSize: 10 }} />
+              <Tooltip labelFormatter={(d) => format(new Date(d), "dd/MM/yyyy")} />
+              <Line type="monotone" dataKey="count" stroke="#10b981" strokeWidth={2} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ─── Tab: Relatório ───────────────────────────────────────────────────────────
+
+function TabRelatorio({ analytics }: { analytics?: ClientAnalytics | null }) {
+  if (!analytics) return <p className="text-muted-foreground text-sm">Sem dados.</p>;
+
+  const topService = analytics.topServices[0];
+  const leastService = analytics.topServices.length > 1 ? analytics.topServices[analytics.topServices.length - 1] : null;
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="p-4 rounded border bg-background">
+        <p className="text-xs text-muted-foreground mb-1">Serviço Mais Usado</p>
+        <p className="font-bold text-lg">{topService ? (SERVICE_LABELS[topService.service] || topService.service) : "—"}</p>
+        {topService && <p className="text-xs text-muted-foreground">{topService.count} interações (90d)</p>}
+      </div>
+      <div className="p-4 rounded border bg-background">
+        <p className="text-xs text-muted-foreground mb-1">Serviço Menos Usado</p>
+        <p className="font-bold text-lg">{leastService ? (SERVICE_LABELS[leastService.service] || leastService.service) : "—"}</p>
+        {leastService && <p className="text-xs text-muted-foreground">{leastService.count} interações (90d)</p>}
+      </div>
+      <div className="p-4 rounded border bg-background">
+        <p className="text-xs text-muted-foreground mb-1">Total de Interações</p>
+        <p className="font-bold text-lg">{analytics.totalInteractions}</p>
+        <p className="text-xs text-muted-foreground">desde a ativação</p>
+      </div>
+      <div className="p-4 rounded border bg-background">
+        <p className="text-xs text-muted-foreground mb-1">Média Diária</p>
+        <p className="font-bold text-lg">{analytics.avgPerDay}</p>
+        <p className="text-xs text-muted-foreground">interações/dia</p>
+      </div>
+
+      {analytics.topServices.length > 0 && (
+        <div className="md:col-span-2 lg:col-span-4">
+          <h4 className="text-sm font-medium mb-2">Ranking Completo de Serviços (90 dias)</h4>
+          <div className="border rounded divide-y">
+            {analytics.topServices.map((s, i) => (
+              <div key={s.service} className="flex items-center justify-between px-3 py-2 text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground w-5 text-right">{i + 1}.</span>
+                  <span className="font-medium">{SERVICE_LABELS[s.service] || s.service}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-24 h-2 bg-muted rounded overflow-hidden">
+                    <div
+                      className="h-full rounded"
+                      style={{
+                        width: `${Math.min(100, (s.count / (analytics.topServices[0]?.count || 1)) * 100)}%`,
+                        backgroundColor: SERVICE_COLORS[s.service] || "#6366f1",
+                      }}
+                    />
+                  </div>
+                  <span className="text-muted-foreground w-10 text-right">{s.count}</span>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}

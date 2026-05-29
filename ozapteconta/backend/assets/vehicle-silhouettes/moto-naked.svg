@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 192" width="256" height="192">
+  <rect width="256" height="192" fill="#ffffff"/>
+  <g fill="none" stroke="#000000" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round">
+    <!-- Rodas -->
+    <circle cx="60" cy="146" r="26"/>
+    <circle cx="60" cy="146" r="8"/>
+    <path d="M48 138 L72 138" stroke-width="1.4"/>
+    <path d="M40 146 L80 146" stroke-width="1.4"/>
+    <circle cx="200" cy="146" r="26"/>
+    <circle cx="200" cy="146" r="8"/>
+    <path d="M188 138 L212 138" stroke-width="1.4"/>
+    <path d="M180 146 L220 146" stroke-width="1.4"/>
+    <!-- Tanque -->
+    <path d="M104 110 Q120 92 142 92 L160 92 Q172 92 174 104 L174 122 L116 122 Q104 122 104 110 Z"/>
+    <!-- Banco (plano) -->
+    <path d="M174 116 L210 116 Q216 116 216 122 L216 124 L180 130 L174 124 Z"/>
+    <!-- Garfo dianteiro -->
+    <path d="M60 132 L70 96 Q72 92 78 92 L92 92"/>
+    <!-- Guidão -->
+    <path d="M78 92 L92 84"/>
+    <path d="M92 84 L106 84"/>
+    <!-- Farol redondo -->
+    <circle cx="78" cy="96" r="8"/>
+    <!-- Motor (exposto, naked) -->
+    <path d="M110 122 L110 138 L160 138 L160 122"/>
+    <path d="M118 128 L118 132"/>
+    <path d="M132 128 L132 132"/>
+    <path d="M146 128 L146 132"/>
+    <!-- Quadro traseiro -->
+    <path d="M160 138 L200 138"/>
+    <!-- Chão -->
+    <path d="M20 174 L240 174"/>
+  </g>
+</svg>

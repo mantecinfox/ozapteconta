@@ -11,6 +11,8 @@ import { logger } from "./utils/logger";
 import { prisma } from "./config/prisma";
 import { startReminderCron } from "./services/reminderService";
 import recurringBillingService from "./services/recurringBillingService";
+import { warmupSilhouetteCache } from "./services/vehicleSilhouetteService";
+import { warmupNutritionMealCache } from "./services/nutritionMealImageService";
 import { auditAdminRequest } from "./services/adminAuditService";
 
 // Rotas
@@ -26,6 +28,7 @@ import botKnowledgeRouter from "./routes/botKnowledge";
 import subscriptionsRouter from "./routes/subscriptions";
 import paymentGatewaySettingsRouter from "./routes/paymentGatewaySettings";
 import adminAuditLogsRouter from "./routes/adminAuditLogs";
+import adminPriceSourcesRouter from "./routes/adminPriceSources";
 
 const app = express();
 
@@ -57,6 +60,7 @@ app.use("/api/bot-knowledge", botKnowledgeRouter);
 app.use("/api/subscriptions", subscriptionsRouter);
 app.use("/api/admin/audit-logs", adminAuditLogsRouter);
 app.use("/api/admin", paymentGatewaySettingsRouter);
+app.use("/api/admin", adminPriceSourcesRouter);
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 app.get("/api/health", (_req, res) => {
@@ -94,6 +98,10 @@ async function bootstrap() {
 
   // Inicia cobrança recorrente
   recurringBillingService.start();
+
+  // Pré-carrega imagens fixas em RAM (FIPE + refeição nutrição)
+  warmupSilhouetteCache();
+  warmupNutritionMealCache();
 
   app.listen(config.port, () => {
     logger.info(`\n${"═".repeat(50)}`);

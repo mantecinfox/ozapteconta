@@ -4,11 +4,12 @@ import { useParams } from "react-router-dom";
 import QRCode from "react-qr-code";
 import api from "@/lib/api";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from "@/components/ui";
+import { formatPlanSummary } from "@/lib/clientUtils";
 
 interface ClientQrResponse {
   id: number;
   fullName: string;
-  plan: "HOME" | "OFFICE" | "FULL";
+  plan: "HOME" | "OFFICE" | "FULL" | "TRAVEL";
   status: "PENDING_ACTIVATION" | "ACTIVE" | "INACTIVE";
   qrToken: string;
   qrLink: string;
@@ -26,7 +27,7 @@ interface ClientReportResponse {
   client: {
     id: number;
     fullName: string;
-    plan: "HOME" | "OFFICE" | "FULL";
+    plan: "HOME" | "OFFICE" | "FULL" | "TRAVEL";
     status: "PENDING_ACTIVATION" | "ACTIVE" | "INACTIVE";
   };
   metrics: {
@@ -86,7 +87,7 @@ export default function ClientQr() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="font-semibold text-foreground">{data.fullName}</p>
-                <p className="text-xs text-muted-foreground">Plano {data.plan}</p>
+                <p className="text-xs text-muted-foreground">{formatPlanSummary(data.plan)}</p>
               </div>
               <Badge variant={data.status === "ACTIVE" ? "success" : data.status === "INACTIVE" ? "secondary" : "warning"}>
                 {data.status}

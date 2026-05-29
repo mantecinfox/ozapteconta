@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 192" width="256" height="192">
+  <rect width="256" height="192" fill="#ffffff"/>
+  <g fill="none" stroke="#000000" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round">
+    <!-- Pickup: cabine + caçamba aberta -->
+    <!-- Cabine (esquerda) -->
+    <path d="M16 144 L16 126 Q16 118 26 116 L52 112 Q62 84 80 78 L132 78 Q150 82 154 112"/>
+    <!-- Linha entre cabine e caçamba -->
+    <path d="M154 112 L154 144"/>
+    <!-- Caçamba (direita) -->
+    <path d="M154 112 L154 100 L228 100 L228 112"/>
+    <path d="M228 112 L240 116 Q244 118 244 126 L244 144"/>
+    <!-- Teto da cabine -->
+    <path d="M80 78 L132 78"/>
+    <!-- Cabine: pilares -->
+    <path d="M62 112 L80 78"/>
+    <path d="M132 78 L154 112"/>
+    <path d="M106 78 L106 112"/>
+    <!-- Chão -->
+    <path d="M8 144 L248 144"/>
+    <!-- Rodas (off-road) -->
+    <circle cx="68" cy="144" r="16"/>
+    <circle cx="68" cy="144" r="6"/>
+    <circle cx="202" cy="144" r="16"/>
+    <circle cx="202" cy="144" r="6"/>
+    <!-- Estribo / para-choque -->
+    <path d="M16 130 L34 130"/>
+    <path d="M228 132 L244 132"/>
+    <!-- Maçaneta -->
+    <path d="M84 122 L100 122"/>
+  </g>
+</svg>

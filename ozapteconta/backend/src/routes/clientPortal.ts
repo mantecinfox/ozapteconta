@@ -10,6 +10,7 @@ import { authMiddleware, requireClient } from "../middleware/auth";
 import { issueClientPortalAccess } from "../services/clientAccessService";
 import { sendMessage } from "../services/whatsappService";
 import { sendEmail } from "../services/emailService";
+import { applyBillingCycleFromPayment } from "../services/subscriptionBillingCycleService";
 
 const router = Router();
 
@@ -21,10 +22,11 @@ function normalizeZip(v: string) {
   return v.replace(/\D/g, "");
 }
 
-function parsePlan(v: string): "HOME" | "FULL" {
+function parsePlan(v: string): "HOME" | "FULL" | "TRAVEL" {
   const upper = String(v).toUpperCase();
   if (upper === "FULL") return "FULL";
-  return "HOME"; // Padrão
+  if (upper === "TRAVEL") return "TRAVEL";
+  return "HOME";
 }
 
 async function getPortalBaseUrl() {
@@ -428,7 +430,6 @@ router.post("/register", async (req: Request, res: Response) => {
         plan,
         priceMonthly: planData.priceMonthly,
         status: "PENDING",
-        nextBillingDate: addDays(new Date(), 30),
       },
     });
 
@@ -889,13 +890,28 @@ router.post("/:token/activate", async (req: Request, res: Response) => {
   const token = String(req.params.token || "");
 
   try {
+    const client = await prisma.clientProfile.findUnique({
+      where: { qrToken: token },
+      include: { subscription: true },
+    });
+
+    if (!client) {
+      res.status(400).json({ error: "Token inválido para ativação" });
+      return;
+    }
+
+    const activatedAt = new Date();
     const updated = await prisma.clientProfile.update({
       where: { qrToken: token },
       data: {
         status: "ACTIVE",
-        activatedAt: new Date(),
+        activatedAt,
       },
     });
+
+    if (client.subscription) {
+      await applyBillingCycleFromPayment(client.subscription.id, activatedAt);
+    }
 
     res.json({ success: true, status: updated.status });
   } catch (err) {

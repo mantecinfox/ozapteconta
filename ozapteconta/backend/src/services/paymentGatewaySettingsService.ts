@@ -65,11 +65,13 @@ class PaymentGatewaySettingsService {
           timeoutSeconds: dbConfig.timeoutSeconds,
           maxRetries: dbConfig.maxRetries,
           config: {
-            infinitypay: dbConfig.infinityPayApiKey ? {
-              merchantKey: dbConfig.infinityPayMerchantKey || undefined,
-              apiKey: dbConfig.infinityPayApiKey,
-              webhookSecret: dbConfig.infinityPayWebhookSecret || undefined,
-            } : undefined,
+            infinitypay: dbConfig.infinityPayMerchantKey
+              ? {
+                  merchantKey: dbConfig.infinityPayMerchantKey,
+                  apiKey: dbConfig.infinityPayApiKey || undefined,
+                  webhookSecret: dbConfig.infinityPayWebhookSecret || undefined,
+                }
+              : undefined,
             mercadopago: dbConfig.mercadoPagoAccessToken ? {
               accessToken: dbConfig.mercadoPagoAccessToken,
               publicKey: dbConfig.mercadoPagoPublicKey || undefined,
@@ -136,7 +138,8 @@ class PaymentGatewaySettingsService {
     if (!config || !config.isEnabled) return false;
 
     if (provider === "infinitypay") {
-      return !!(config.config.infinitypay?.apiKey && config.config.infinitypay?.merchantKey);
+      // Checkout InfinitePay: Merchant Key ($handle) basta para links PIX/cartão.
+      return !!config.config.infinitypay?.merchantKey;
     } else if (provider === "mercadopago") {
       return !!(config.config.mercadopago?.accessToken);
     }

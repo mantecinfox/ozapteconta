@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 192" width="256" height="192">
+  <rect width="256" height="192" fill="#ffffff"/>
+  <g fill="none" stroke="#000000" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round">
+    <!-- Ferrari Purosangue: SUV-coupe, capo longo, fastback, linha baixa esportiva -->
+    <path d="M14 140 L14 128 Q14 120 24 118 L52 114 Q68 88 98 82 L148 78 Q188 78 210 94 L232 108 Q244 114 246 124 L246 140"/>
+    <!-- Teto fastback (queda forte para traseira) -->
+    <path d="M72 114 Q98 72 142 70 Q182 70 208 98"/>
+    <!-- Para-brisa inclinado -->
+    <path d="M98 82 L142 70"/>
+    <!-- Vidro traseiro coupe -->
+    <path d="M142 70 L208 98"/>
+    <!-- Coluna central (4 portas) -->
+    <path d="M152 70 L152 108"/>
+  </g>
+  <g fill="none" stroke="#000000" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M8 140 L248 140"/>
+    <circle cx="62" cy="140" r="15"/>
+    <circle cx="62" cy="140" r="5"/>
+    <circle cx="194" cy="140" r="15"/>
+    <circle cx="194" cy="140" r="5"/>
+    <!-- Entrada de ar lateral (assinatura esportiva) -->
+    <path d="M118 108 Q128 100 138 108" stroke-width="1.8"/>
+    <!-- Difusor / linha traseira -->
+    <path d="M218 124 L246 124"/>
+    <!-- Maçaneta -->
+    <path d="M128 106 L148 106"/>
+    <!-- Farol dianteiro agressivo -->
+    <path d="M228 118 L246 118"/>
+  </g>
+</svg>

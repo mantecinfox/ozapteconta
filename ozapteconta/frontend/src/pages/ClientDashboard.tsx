@@ -6,6 +6,7 @@ import api from "@/lib/api";
 import { BarChart3, ArrowDownCircle, Mic } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { formatPlanSummary } from "@/lib/clientUtils";
 
 type ReportResponse = {
   client: { id: number; fullName: string; plan: string; status: string };
@@ -243,7 +244,7 @@ export default function ClientDashboard() {
           <div>
             <h1 className="text-2xl font-bold text-foreground">Painel do Cliente</h1>
             <p className="text-sm text-muted-foreground">
-              {data?.client?.fullName || user?.name || "Cliente"} · Plano {data?.client?.plan || user?.plan || "-"}
+              {data?.client?.fullName || user?.name || "Cliente"} · {formatPlanSummary(data?.client?.plan || user?.plan || "-")}
             </p>
           </div>
           <div className="flex gap-2">

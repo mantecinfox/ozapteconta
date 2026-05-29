@@ -12,6 +12,11 @@
 import { config } from "../config";
 import { logger } from "../utils/logger";
 import {
+  formatSourceLabel,
+  getMacroHelp as buildMacroHelp,
+  getMacroIndicator,
+} from "./macroIndicatorsService";
+import {
   formatNumberPtBr,
   montarBlocoCotacaoCripto,
   montarCabecalhoCotacoesMultiplas,
@@ -288,44 +293,93 @@ export async function getEuro(): Promise<string> {
 /** Taxa Selic vigente */
 export async function getSelic(): Promise<string> {
   try {
-    const s = await bcbSgs(11);
+    const s = await getMacroIndicator("selic");
     return (
       `📊 *Taxa Selic (Meta)*\n` +
       `Valor: *${fmt(s.value, 2)}% ao ano*\n` +
-      `📅 Data: ${s.date}\n` +
-      `_Fonte: Banco Central do Brasil_`
+      `📅 Data: ${s.referenceDate}\n` +
+      `_Fonte: ${formatSourceLabel(s.sourceSlug)}_`
     );
   } catch (e) {
     logger.error("[market] getSelic error", e);
-    return "⚠️ Não foi possível obter a taxa Selic agora.";
+    return "⚠️ Não foi possível obter a taxa Selic agora. Tente novamente em 1–2 minutos.";
   }
 }
 
 /** IPCA mensal mais recente */
 export async function getIPCA(): Promise<string> {
   try {
-    const i = await bcbSgs(433);
+    const i = await getMacroIndicator("ipca_mensal");
     return (
       `📈 *IPCA (Inflação Mensal)*\n` +
       `Valor: *${fmt(i.value, 2)}% no mês*\n` +
-      `📅 Data: ${i.date}\n` +
-      `_Fonte: Banco Central do Brasil_`
+      `📅 Data: ${i.referenceDate}\n` +
+      `_Fonte: ${formatSourceLabel(i.sourceSlug)}_`
     );
   } catch (e) {
     logger.error("[market] getIPCA error", e);
-    return "⚠️ Não foi possível obter o IPCA agora.";
+    return "⚠️ Não foi possível obter o IPCA agora. Tente novamente em 1–2 minutos.";
+  }
+}
+
+/** IPCA acumulado 12 meses */
+export async function getIPCA12(): Promise<string> {
+  try {
+    const i = await getMacroIndicator("ipca_12m");
+    return (
+      `📈 *IPCA (Inflação Acumulada 12 meses)*\n` +
+      `Valor: *${fmt(i.value, 2)}%*\n` +
+      `📅 Referência: ${i.referenceDate}\n` +
+      `_Fonte: ${formatSourceLabel(i.sourceSlug)}_`
+    );
+  } catch (e) {
+    logger.error("[market] getIPCA12 error", e);
+    return "⚠️ Não foi possível obter o IPCA acumulado agora.";
+  }
+}
+
+/** CDI */
+export async function getCDI(): Promise<string> {
+  try {
+    const c = await getMacroIndicator("cdi");
+    return (
+      `📊 *CDI*\n` +
+      `Valor: *${fmt(c.value, 2)}%*\n` +
+      `📅 Data: ${c.referenceDate}\n` +
+      `_Fonte: ${formatSourceLabel(c.sourceSlug)}_`
+    );
+  } catch (e) {
+    logger.error("[market] getCDI error", e);
+    return "⚠️ Não foi possível obter o CDI agora.";
+  }
+}
+
+/** IPC-Fipe (São Paulo) */
+export async function getIPCFipe(): Promise<string> {
+  try {
+    const i = await getMacroIndicator("ipc_fipe");
+    return (
+      `📈 *IPC-Fipe (São Paulo)*\n` +
+      `Valor: *${fmt(i.value, 2)}% no mês*\n` +
+      `📅 Data: ${i.referenceDate}\n` +
+      `_Fonte: ${formatSourceLabel(i.sourceSlug)}_\n\n` +
+      `_Diferente do IPCA nacional (IBGE)._`
+    );
+  } catch (e) {
+    logger.error("[market] getIPCFipe error", e);
+    return "⚠️ Não foi possível obter o IPC-Fipe agora.";
   }
 }
 
 /** IGP-M mensal */
 export async function getIGPM(): Promise<string> {
   try {
-    const g = await bcbSgs(189);
+    const g = await getMacroIndicator("igpm");
     return (
       `📉 *IGP-M (Inflação Mensal)*\n` +
       `Valor: *${fmt(g.value, 2)}% no mês*\n` +
-      `📅 Data: ${g.date}\n` +
-      `_Fonte: Banco Central do Brasil_`
+      `📅 Data: ${g.referenceDate}\n` +
+      `_Fonte: ${formatSourceLabel(g.sourceSlug)}_`
     );
   } catch (e) {
     logger.error("[market] getIGPM error", e);
@@ -534,9 +588,9 @@ export async function getMarketSummary(): Promise<string> {
 
 export interface MarketQuery {
   type:
-    | "dollar" | "euro" | "selic" | "ipca" | "igpm"
+    | "dollar" | "euro" | "selic" | "ipca" | "ipca12" | "cdi" | "ipcfipe" | "igpm"
     | "bitcoin" | "ethereum" | "crypto" | "crypto_multi" | "stock_b3"
-    | "stock_global" | "ibovespa" | "summary" | "help_market";
+    | "stock_global" | "ibovespa" | "summary" | "help_market" | "macro_help";
   param?: string; // ticker ou símbolo de cripto
 }
 
@@ -594,13 +648,33 @@ export function detectMarketQuery(text: string): MarketQuery | null {
     return { type: "euro" };
   }
 
+  // Ajuda macro / indicadores
+  if (/^(indicadores|indices|inflacao|macro)(\s+help)?$/.test(t)) {
+    return { type: "macro_help" };
+  }
+
   // Selic
   if (/\b(selic|taxa selic|taxa basica|juros basicos?)\b/.test(t)) {
     return { type: "selic" };
   }
 
-  // IPCA
-  if (/\b(ipca|inflacao mensal|indice de preco)\b/.test(t)) {
+  // CDI
+  if (/\b(cdi|certificado de deposito interbancario)\b/.test(t)) {
+    return { type: "cdi" };
+  }
+
+  // IPCA 12 meses (antes do IPCA mensal)
+  if (/\b(ipca\s*12|ipca\s*doze|inflacao acumulada|inflacao no ano|inflacao 12 meses)\b/.test(t)) {
+    return { type: "ipca12" };
+  }
+
+  // IPC-Fipe
+  if (/\b(ipc fipe|ipc-fipe|inflacao sao paulo|inflacao sp)\b/.test(t)) {
+    return { type: "ipcfipe" };
+  }
+
+  // IPCA mensual
+  if (/\b(ipca|inflacao mensal|indice de preco)\b/.test(t) && !/\b12\b/.test(t)) {
     return { type: "ipca" };
   }
 
@@ -664,6 +738,9 @@ export async function executeMarketQuery(query: MarketQuery): Promise<string> {
     case "euro":       return getEuro();
     case "selic":      return getSelic();
     case "ipca":       return getIPCA();
+    case "ipca12":     return getIPCA12();
+    case "cdi":        return getCDI();
+    case "ipcfipe":    return getIPCFipe();
     case "igpm":       return getIGPM();
     case "ibovespa":   return getIbovespa();
     case "bitcoin":    return getBitcoin();
@@ -688,8 +765,14 @@ export async function executeMarketQuery(query: MarketQuery): Promise<string> {
     case "stock_b3":   return getStockB3(query.param || "PETR4");
     case "stock_global": return getGlobalStock(query.param || "AAPL");
     case "help_market": return getMarketHelp();
+    case "macro_help": return getMacroHelp();
     default:           return getMarketSummary();
   }
+}
+
+/** Mensagem de ajuda sobre indicadores macro */
+export function getMacroHelp(): string {
+  return buildMacroHelp();
 }
 
 /** Mensagem de ajuda sobre os comandos de mercado */
@@ -706,14 +789,18 @@ export function getMarketHelp(): string {
     `₿ *Criptomoedas*\n` +
     `   → "bitcoin" / "ethereum" / "SOL"\n\n` +
     `🏦 *Indicadores*\n` +
-    `   → "selic" / "IPCA" / "IGP-M"\n\n` +
+    `   → "selic" / "IPCA" / "CDI" / "IGP-M"\n` +
+    `   → "ipca 12 meses" / "ipc fipe"\n` +
+    `   → Digite _indicadores_ para ver mais\n\n` +
+    `🏠 *Imóveis (FipeZap)*\n` +
+    `   → "fipezap" / "fipezap sao paulo venda"\n\n` +
     `📋 *Resumo Geral*\n` +
     `   → "mercado hoje" / "resumo do mercado"\n\n` +
     `📈 *Análise de Investimento*\n` +
     `   → "analisar PETR4" / "análise bitcoin"\n` +
     `   → "melhores ações agora" / "top criptomoedas"\n` +
     `   → "onde investir" / "onde colocar meu dinheiro"\n\n` +
-    `_Os dados são atualizados automaticamente a cada 5 minutos._`
+    `_Os dados são atualizados automaticamente com fallback entre fontes oficiais._`
   );
 }
 

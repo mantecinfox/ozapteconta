@@ -62,4 +62,47 @@ export const config = {
     brapiToken: process.env.BRAPI_TOKEN || "",
     alphaVantageKey: process.env.ALPHA_VANTAGE_KEY || "",
   },
+
+  externalData: {
+    ipeadataBaseUrl: process.env.IPEADATA_BASE_URL || "http://www.ipeadata.gov.br/api/odata4",
+    buscapeAppToken: process.env.BUSCAPE_APP_TOKEN || "",
+    buscapeAuthToken: process.env.BUSCAPE_AUTH_TOKEN || "",
+    fipeZapDiskCacheDir: process.env.FIPEZAP_CACHE_DIR
+      ? path.resolve(process.env.FIPEZAP_CACHE_DIR)
+      : path.resolve(__dirname, "../../data/fipezap-cache"),
+    get buscapeApiConfigured(): boolean {
+      return Boolean(this.buscapeAppToken && this.buscapeAuthToken);
+    },
+  },
+
+  priceComparison: {
+    mercadoLivre: {
+      clientId: process.env.MERCADO_LIVRE_CLIENT_ID || "",
+      clientSecret: process.env.MERCADO_LIVRE_CLIENT_SECRET || "",
+      get configured(): boolean {
+        return Boolean(this.clientId && this.clientSecret);
+      },
+    },
+  },
+
+  redis: {
+    host: process.env.REDIS_HOST || "127.0.0.1",
+    port: parseInt(process.env.REDIS_PORT || "6379", 10),
+    username: process.env.REDIS_USERNAME || "",
+    password: process.env.REDIS_PASSWORD || "",
+    db: parseInt(process.env.REDIS_DB || "0", 10),
+  },
+
+  apify: {
+    apiToken: process.env.APIFY_API_TOKEN || "",
+    flightActorId:
+      process.env.APIFY_FLIGHT_ACTOR_ID ||
+      "johnvc/google-flights-data-scraper-flight-and-price-search",
+    requestTimeoutMs: parseInt(process.env.APIFY_REQUEST_TIMEOUT_MS || "30000", 10),
+    runTimeoutMs: parseInt(process.env.APIFY_RUN_TIMEOUT_MS || "120000", 10),
+    maxResults: parseInt(process.env.APIFY_FLIGHT_MAX_RESULTS || "20", 10),
+    get configured(): boolean {
+      return Boolean(this.apiToken && this.flightActorId);
+    },
+  },
 };

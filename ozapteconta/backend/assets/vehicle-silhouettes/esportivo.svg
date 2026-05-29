@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 192" width="256" height="192">
+  <rect width="256" height="192" fill="#ffffff"/>
+  <g fill="none" stroke="#000000" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round">
+    <!-- Esportivo: linha baixa, agressiva, longa capô -->
+    <path d="M18 142 L18 130 Q18 124 26 122 L48 118 Q60 108 80 104 L130 96 Q160 96 188 110 L226 118 Q240 122 240 130 L240 142"/>
+    <!-- Linha do teto (bem baixa, fastback) -->
+    <path d="M60 118 Q90 84 138 84 Q176 84 196 112"/>
+    <!-- Para-brisa -->
+    <path d="M88 96 L138 84"/>
+    <!-- Vidro traseiro inclinado -->
+    <path d="M138 84 L196 112"/>
+    <!-- Chão -->
+    <path d="M8 142 L248 142"/>
+    <!-- Rodas (largas) -->
+    <circle cx="68" cy="142" r="15"/>
+    <circle cx="68" cy="142" r="5"/>
+    <path d="M55 138 L81 138" stroke-width="1.6"/>
+    <circle cx="198" cy="142" r="15"/>
+    <circle cx="198" cy="142" r="5"/>
+    <path d="M185 138 L211 138" stroke-width="1.6"/>
+    <!-- Frente baixa -->
+    <path d="M220 132 L240 132"/>
+    <!-- Maçaneta -->
+    <path d="M118 116 L138 116"/>
+  </g>
+</svg>

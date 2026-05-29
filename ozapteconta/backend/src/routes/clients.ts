@@ -11,6 +11,8 @@ import infinityPayService from "../services/infinityPayService";
 import { sendMessage } from "../services/whatsappService";
 import { sendEmail } from "../services/emailService";
 import { config } from "../config";
+import { applyBillingCycleFromPayment } from "../services/subscriptionBillingCycleService";
+import recurringBillingService from "../services/recurringBillingService";
 
 const router = Router();
 router.use(authMiddleware);
@@ -30,6 +32,8 @@ function normalizeZip(v: string) {
 function parsePlan(v: string): ClientPlan {
   const upper = String(v || "").toUpperCase();
   if (upper === "FULL") return "FULL";
+  if (upper === "TRAVEL") return "TRAVEL";
+  if (upper === "OFFICE") return "OFFICE";
   return "HOME";
 }
 
@@ -259,7 +263,6 @@ router.post("/", async (req: Request, res: Response) => {
           plan,
           priceMonthly: planData.priceMonthly,
           status: "PENDING",
-            nextBillingDate: addDays(new Date(), 30),
         },
       });
 
@@ -577,22 +580,63 @@ router.post("/:id/activate", async (req: Request, res: Response) => {
       return;
     }
 
+    const activatedAt = new Date();
+
     await prisma.clientProfile.update({
       where: { id },
-      data: { status: "ACTIVE", activatedAt: new Date() },
+      data: { status: "ACTIVE", activatedAt },
     });
 
     if (client.subscription) {
-      await prisma.clientSubscription.update({
-        where: { id: client.subscription.id },
-        data: { status: "ACTIVE" },
-      });
+      await applyBillingCycleFromPayment(client.subscription.id, activatedAt);
     }
 
     res.json({ success: true, message: "Cliente ativado com sucesso" });
   } catch (err) {
     logger.error("[Clients] Erro ao ativar cliente", err);
     res.status(500).json({ error: "Erro ao ativar cliente" });
+  }
+});
+
+// POST /api/clients/:id/send-renewal-link
+router.post("/:id/send-renewal-link", async (req: Request, res: Response) => {
+  const id = parseInt(String(req.params.id), 10);
+
+  if (!Number.isFinite(id) || id <= 0) {
+    res.status(400).json({ error: "ID de cliente inválido" });
+    return;
+  }
+
+  try {
+    const client = await prisma.clientProfile.findUnique({
+      where: { id },
+      select: { id: true, fullName: true, phone: true },
+    });
+
+    if (!client) {
+      res.status(404).json({ error: "Cliente não encontrado" });
+      return;
+    }
+
+    const result = await recurringBillingService.sendRenewalLinkToClient(id);
+
+    if (!result.success) {
+      res.status(502).json({ error: result.error || "Falha ao enviar link de renovação" });
+      return;
+    }
+
+    res.json({
+      success: true,
+      clientId: id,
+      clientName: client.fullName,
+      phone: client.phone,
+      checkoutUrl: result.checkoutUrl,
+      whatsappSent: result.whatsappSent,
+      emailSent: result.emailSent,
+    });
+  } catch (err) {
+    logger.error("[Clients] Erro ao enviar link de renovação", err);
+    res.status(500).json({ error: "Erro ao enviar link de renovação" });
   }
 });
 
@@ -614,6 +658,222 @@ router.post("/:id/regenerate-qr", async (req: Request, res: Response) => {
   } catch (err) {
     logger.error("[Clients] Erro ao regenerar QR", err);
     res.status(500).json({ error: "Erro ao regenerar QR" });
+  }
+});
+
+// ─── Analytics ────────────────────────────────────────────────────────────────
+
+// GET /api/clients/analytics/overview
+router.get("/analytics/overview", async (_req: Request, res: Response) => {
+  try {
+    const now = new Date();
+    const thirtyDaysAgo = addDays(now, -30);
+
+    const allClients = await prisma.clientProfile.findMany({
+      include: { subscription: true },
+    });
+
+    const inadimplentes: { id: number; fullName: string; daysOverdue: number; amount: number }[] = [];
+    const proximosVencimento: { id: number; fullName: string; daysRemaining: number; amount: number }[] = [];
+
+    for (const client of allClients) {
+      if (!client.subscription || client.status !== "ACTIVE") continue;
+      const sub = client.subscription;
+      if (!sub.nextBillingDate) continue;
+      const daysUntil = Math.round(
+        (new Date(sub.nextBillingDate).getTime() - now.getTime()) / (24 * 60 * 60 * 1000),
+      );
+      const amount = Number(sub.priceMonthly);
+      if (daysUntil < 0) {
+        inadimplentes.push({ id: client.id, fullName: client.fullName, daysOverdue: Math.abs(daysUntil), amount });
+      } else if (daysUntil <= 7) {
+        proximosVencimento.push({ id: client.id, fullName: client.fullName, daysRemaining: daysUntil, amount });
+      }
+    }
+
+    inadimplentes.sort((a, b) => b.daysOverdue - a.daysOverdue);
+    proximosVencimento.sort((a, b) => a.daysRemaining - b.daysRemaining);
+
+    // Distribuição de uso por serviço (últimos 30 dias)
+    const serviceRaw = await prisma.clientInteractionLog.groupBy({
+      by: ["intent"],
+      where: { createdAt: { gte: thirtyDaysAgo } },
+      _count: { id: true },
+    });
+    const serviceDistribution = serviceRaw.map((r) => ({ service: r.intent, count: r._count.id }));
+
+    // Horários de pico (últimos 30 dias)
+    const hourLogs = await prisma.clientInteractionLog.findMany({
+      where: { createdAt: { gte: thirtyDaysAgo } },
+      select: { createdAt: true },
+    });
+    const peakHoursGlobal = Array.from({ length: 24 }, (_, h) => ({ hour: h, count: 0 }));
+    for (const log of hourLogs) {
+      const h = new Date(log.createdAt).getHours();
+      peakHoursGlobal[h].count += 1;
+    }
+
+    // Demografias
+    const genderCounts = await prisma.clientProfile.groupBy({
+      by: ["gender"],
+      _count: { id: true },
+    });
+    const typeCounts = await prisma.clientProfile.groupBy({
+      by: ["clientType"],
+      _count: { id: true },
+    });
+    const pjCount = typeCounts.find((t) => t.clientType === "PJ")?._count.id ?? 0;
+    const maleCount = genderCounts.find((g) => g.gender === "MALE")?._count.id ?? 0;
+    const femaleCount = genderCounts.find((g) => g.gender === "FEMALE")?._count.id ?? 0;
+    const demographicBreakdown = [
+      { label: "Homem", count: maleCount },
+      { label: "Mulher", count: femaleCount },
+      { label: "Empresa", count: pjCount },
+    ];
+
+    // Tendência de crescimento (últimos 6 meses)
+    const sixMonthsAgo = addDays(now, -180);
+    const growthClients = await prisma.clientProfile.findMany({
+      where: { createdAt: { gte: sixMonthsAgo } },
+      select: { createdAt: true },
+    });
+    const growthMap: Record<string, number> = {};
+    for (const c of growthClients) {
+      const key = c.createdAt.toISOString().slice(0, 7);
+      growthMap[key] = (growthMap[key] || 0) + 1;
+    }
+    const growthTrend = Object.entries(growthMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([month, count]) => ({ month, count }));
+
+    res.json({
+      inadimplentes,
+      proximosVencimento,
+      serviceDistribution,
+      peakHoursGlobal,
+      demographicBreakdown,
+      growthTrend,
+    });
+  } catch (err) {
+    logger.error("[Clients] Erro ao buscar analytics overview:", err);
+    res.status(500).json({ error: "Erro interno" });
+  }
+});
+
+// GET /api/clients/:id/analytics
+router.get("/:id/analytics", async (req: Request, res: Response) => {
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: "ID inválido" });
+
+  try {
+    const client = await prisma.clientProfile.findUnique({
+      where: { id },
+      include: { subscription: true },
+    });
+    if (!client) return res.status(404).json({ error: "Cliente não encontrado" });
+
+    const now = new Date();
+    const thirtyDaysAgo = addDays(now, -30);
+    const ninetyDaysAgo = addDays(now, -90);
+
+    // Uso por serviço (30 dias)
+    const serviceUsage30 = await prisma.clientInteractionLog.groupBy({
+      by: ["intent"],
+      where: { clientId: id, createdAt: { gte: thirtyDaysAgo } },
+      _count: { id: true },
+    });
+
+    // Uso por serviço (90 dias)
+    const serviceUsage90 = await prisma.clientInteractionLog.groupBy({
+      by: ["intent"],
+      where: { clientId: id, createdAt: { gte: ninetyDaysAgo } },
+      _count: { id: true },
+    });
+
+    // Horários de pico do cliente
+    const clientHourLogs = await prisma.clientInteractionLog.findMany({
+      where: { clientId: id, createdAt: { gte: thirtyDaysAgo } },
+      select: { createdAt: true },
+    });
+    const peakHours = Array.from({ length: 24 }, (_, h) => ({ hour: h, count: 0 }));
+    for (const log of clientHourLogs) {
+      peakHours[new Date(log.createdAt).getHours()].count += 1;
+    }
+
+    // Tendência diária (últimos 30 dias)
+    const usageTrend: { date: string; count: number }[] = [];
+    const trendMap: Record<string, number> = {};
+    for (const log of clientHourLogs) {
+      const key = log.createdAt.toISOString().slice(0, 10);
+      trendMap[key] = (trendMap[key] || 0) + 1;
+    }
+    for (let d = 0; d < 30; d++) {
+      const day = addDays(now, -d).toISOString().slice(0, 10);
+      usageTrend.unshift({ date: day, count: trendMap[day] || 0 });
+    }
+
+    // Top serviços
+    const sorted90 = [...serviceUsage90].sort((a, b) => b._count.id - a._count.id);
+    const topServices = sorted90.map((s) => ({ service: s.intent, count: s._count.id }));
+
+    // Subscription info
+    let subscriptionInfo = null;
+    if (client.subscription) {
+      const sub = client.subscription;
+      const daysRemaining = sub.nextBillingDate
+        ? Math.round((new Date(sub.nextBillingDate).getTime() - now.getTime()) / (24 * 60 * 60 * 1000))
+        : null;
+      const daysOfUse = client.activatedAt
+        ? Math.round((now.getTime() - new Date(client.activatedAt).getTime()) / (24 * 60 * 60 * 1000))
+        : 0;
+      subscriptionInfo = {
+        status: sub.status,
+        plan: sub.plan,
+        priceMonthly: Number(sub.priceMonthly),
+        nextBillingDate: sub.nextBillingDate,
+        lastBillingDate: sub.lastBillingDate,
+        daysRemaining,
+        daysOfUse,
+      };
+    }
+
+    // Histórico de pagamentos
+    const paymentHistory = client.subscription
+      ? await prisma.payment.findMany({
+          where: { subscriptionId: client.subscription.id },
+          orderBy: { chargedAt: "desc" },
+          take: 20,
+          select: { id: true, amount: true, status: true, paymentMethod: true, chargedAt: true, createdAt: true },
+        })
+      : [];
+
+    // Total de interações e média diária
+    const totalInteractions = await prisma.clientInteractionLog.count({ where: { clientId: id } });
+    const daysActive = client.activatedAt
+      ? Math.max(1, Math.round((now.getTime() - new Date(client.activatedAt).getTime()) / (24 * 60 * 60 * 1000)))
+      : 1;
+    const avgPerDay = Math.round((totalInteractions / daysActive) * 10) / 10;
+
+    res.json({
+      serviceUsage: {
+        last30Days: serviceUsage30.map((s) => ({ service: s.intent, count: s._count.id })),
+        last90Days: serviceUsage90.map((s) => ({ service: s.intent, count: s._count.id })),
+      },
+      peakHours,
+      usageTrend,
+      topServices,
+      subscriptionInfo,
+      paymentHistory,
+      totalInteractions,
+      avgPerDay,
+      demographics: {
+        gender: client.gender,
+        clientType: client.clientType,
+      },
+    });
+  } catch (err) {
+    logger.error("[Clients] Erro ao buscar analytics do cliente:", err);
+    res.status(500).json({ error: "Erro interno" });
   }
 });
 
