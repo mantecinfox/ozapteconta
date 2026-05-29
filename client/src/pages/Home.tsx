@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button';
-import { ArrowRight, CheckCircle2, TrendingUp } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Plane, TrendingUp } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
 /**
@@ -22,7 +22,9 @@ export default function Home() {
   const [spotsLeft, setSpotsLeft] = useState(42);
   const whatsappNumber = '553173124224';
   const whatsappMessage = 'Olá! Quero começar a usar o OZAPTECONTA pelo WhatsApp.';
+  const whatsappMessageTravel = 'Olá! Quero assinar o plano Travel com busca de voos no OZAPTECONTA.';
   const whatsappLink = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(whatsappMessage)}`;
+  const whatsappLinkTravel = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(whatsappMessageTravel)}`;
   const whatsappQrCode = `https://api.qrserver.com/v1/create-qr-code/?size=320x320&data=${encodeURIComponent(whatsappLink)}`;
 
   useEffect(() => {
@@ -95,7 +97,8 @@ export default function Home() {
                 <p className="text-lg">✅ Finanças, gastos, metas e investimentos pelo WhatsApp</p>
                 <p className="text-lg">✅ Apoio nutricional e orientação comercial no mesmo assistente</p>
                 <p className="text-lg">✅ Plano Completo com FIPE, mercado financeiro e criptomoedas</p>
-                <p className="text-lg">✅ Plano Padrão a partir de R$ 4,99/mês • Pix ou cartão</p>
+                <p className="text-lg">✅ Plano Travel com busca de voos nacionais por texto ou áudio</p>
+                <p className="text-lg">✅ Padrão R$ 4,99 • Completo R$ 9,99 • Travel R$ 59,90/mês • Pix ou cartão</p>
               </div>
 
               <div className="flex flex-col sm:flex-row gap-4">
@@ -117,7 +120,7 @@ export default function Home() {
               </div>
 
               <p className="text-sm text-green-300 font-bold">
-                ✨ A partir de R$ 4,99/mês • Pix ou cartão • Acesso imediato
+                ✨ Padrão R$ 4,99 • Completo R$ 9,99 • Travel R$ 59,90 • Pix ou cartão
               </p>
             </div>
 
@@ -142,9 +145,9 @@ export default function Home() {
                     <p>R$ 9,99</p>
                     <p className="text-black/70">Completo</p>
                   </div>
-                  <div className="rounded-xl bg-white/10 p-3">
-                    <p className="text-green-300">Pix/cartão</p>
-                    <p className="text-white/70">Ativação</p>
+                  <div className="rounded-xl bg-cyan-400 p-3 text-blue-950">
+                    <p>R$ 59,90</p>
+                    <p className="text-blue-950/70">Travel</p>
                   </div>
                 </div>
               </div>
@@ -476,7 +479,7 @@ export default function Home() {
             </p>
           </div>
 
-          <div className="grid md:grid-cols-2 gap-8 max-w-5xl mx-auto">
+          <div className="grid md:grid-cols-3 gap-8 max-w-7xl mx-auto">
             <div className="bg-white rounded-3xl border-2 border-blue-100 p-8 shadow-lg">
               <div className="mb-6">
                 <span className="bg-blue-100 text-blue-900 px-3 py-1 rounded-full text-sm font-bold">Plano Padrão</span>
@@ -529,6 +532,37 @@ export default function Home() {
               <a href={whatsappLink} target="_blank" rel="noreferrer" className="block">
                 <Button size="lg" className="w-full bg-green-500 hover:bg-green-600 text-black font-bold">
                   Assinar Completo por R$ 9,99
+                </Button>
+              </a>
+            </div>
+
+            <div className="relative bg-gradient-to-br from-cyan-700 via-blue-900 to-blue-950 text-white rounded-3xl border-2 border-cyan-400 p-8 shadow-2xl overflow-hidden">
+              <div className="absolute top-0 right-0 bg-cyan-300 text-blue-950 px-5 py-2 rounded-bl-2xl font-bold text-sm flex items-center gap-1">
+                <Plane className="w-4 h-4" />
+                VOOS
+              </div>
+
+              <div className="mb-6">
+                <span className="bg-cyan-300 text-blue-950 px-3 py-1 rounded-full text-sm font-bold">Plano Travel</span>
+                <h3 className="text-3xl font-bold mt-4">Completo + viagens</h3>
+                <p className="text-cyan-100 mt-2">Tudo do Completo, mais assistente de viagens com busca de passagens aéreas.</p>
+              </div>
+
+              <div className="mb-6">
+                <span className="text-5xl font-bold text-cyan-300">R$ 59,90</span>
+                <span className="text-cyan-100">/mês</span>
+              </div>
+
+              <ul className="space-y-3 text-cyan-50 mb-8">
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-cyan-300 shrink-0" /> Tudo do Plano Completo</li>
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-cyan-300 shrink-0" /> Busca de voos nacionais no WhatsApp</li>
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-cyan-300 shrink-0" /> Assistente conversacional — diga destino ou tema (praia, Nordeste…)</li>
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-cyan-300 shrink-0" /> Funciona por texto ou áudio</li>
+              </ul>
+
+              <a href={whatsappLinkTravel} target="_blank" rel="noreferrer" className="block">
+                <Button size="lg" className="w-full bg-cyan-300 hover:bg-cyan-200 text-blue-950 font-bold">
+                  Assinar Travel por R$ 59,90
                 </Button>
               </a>
             </div>
@@ -610,14 +644,14 @@ export default function Home() {
               <summary className="font-bold text-lg text-blue-900">
                 💳 Preciso de cartão de crédito?
               </summary>
-              <p className="mt-4 text-gray-600">Não. Você pode pagar por Pix ou cartão de crédito. O Plano Padrão custa R$ 4,99/mês e o Plano Completo custa R$ 9,99/mês.</p>
+              <p className="mt-4 text-gray-600">Não. Você pode pagar por Pix ou cartão de crédito. Padrão R$ 4,99/mês, Completo R$ 9,99/mês e Travel R$ 59,90/mês.</p>
             </details>
 
             <details className="bg-white p-6 rounded-lg border-2 border-blue-900 cursor-pointer">
               <summary className="font-bold text-lg text-blue-900">
                 📊 Qual a diferença entre os planos?
               </summary>
-              <p className="mt-4 text-gray-600">O Padrão cobre finanças, nutrição e comercial pelo WhatsApp. O Completo adiciona Tabela FIPE, mercado financeiro, criptomoedas e recursos avançados.</p>
+              <p className="mt-4 text-gray-600">O Padrão cobre finanças, nutrição e comercial. O Completo adiciona FIPE, mercado financeiro e criptomoedas. O Travel inclui tudo isso mais busca de voos e assistente de viagens no WhatsApp.</p>
             </details>
 
             <details className="bg-white p-6 rounded-lg border-2 border-blue-900 cursor-pointer">
@@ -651,7 +685,7 @@ export default function Home() {
             ✅ Comece com um plano acessível
           </h2>
           <p className="text-lg">
-            Escolha entre R$ 4,99/mês no Padrão ou R$ 9,99/mês no Completo, com pagamento por Pix ou cartão.
+            Escolha entre Padrão (R$ 4,99), Completo (R$ 9,99) ou Travel (R$ 59,90), com pagamento por Pix ou cartão.
           </p>
         </div>
       </section>
@@ -690,7 +724,7 @@ export default function Home() {
           </div>
 
           <p className="text-sm text-green-300 font-bold">
-            ✨ Plano Padrão R$ 4,99 • Completo R$ 9,99 • Pix ou cartão
+            ✨ Padrão R$ 4,99 • Completo R$ 9,99 • Travel R$ 59,90 • Pix ou cartão
           </p>
 
           <div className="mt-12 grid gap-6 text-center md:grid-cols-3">
