@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button';
-import { ArrowRight, CheckCircle2, Plane, TrendingUp } from 'lucide-react';
+import { ArrowRight, CheckCircle2, TrendingUp } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
 /**
@@ -20,11 +20,10 @@ export default function Home() {
   const [activeUsers, setActiveUsers] = useState(187);
   const [totalSavings, setTotalSavings] = useState(86000);
   const [spotsLeft, setSpotsLeft] = useState(42);
+  const [promoSecondsLeft, setPromoSecondsLeft] = useState(3 * 24 * 60 * 60);
   const whatsappNumber = '553173124224';
   const whatsappMessage = 'Olá! Quero começar a usar o OZAPTECONTA pelo WhatsApp.';
-  const whatsappMessageTravel = 'Olá! Quero assinar o plano Travel com busca de voos no OZAPTECONTA.';
   const whatsappLink = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(whatsappMessage)}`;
-  const whatsappLinkTravel = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(whatsappMessageTravel)}`;
   const whatsappQrCode = `https://api.qrserver.com/v1/create-qr-code/?size=320x320&data=${encodeURIComponent(whatsappLink)}`;
 
   useEffect(() => {
@@ -36,6 +35,17 @@ export default function Home() {
     }, 3000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setPromoSecondsLeft(prev => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const promoHours = String(Math.floor(promoSecondsLeft / 3600)).padStart(2, '0');
+  const promoMinutes = String(Math.floor((promoSecondsLeft % 3600) / 60)).padStart(2, '0');
+  const promoSeconds = String(promoSecondsLeft % 60).padStart(2, '0');
 
   return (
     <div className="min-h-screen bg-white text-black">
@@ -76,6 +86,35 @@ export default function Home() {
         </div>
       </header>
 
+      <section className="relative overflow-hidden border-y-4 border-yellow-300 bg-gradient-to-r from-yellow-200 via-orange-200 to-yellow-200 py-5">
+        <div className="container mx-auto px-4">
+          <div className="grid gap-4 rounded-2xl border-2 border-yellow-500 bg-white/90 p-5 shadow-2xl md:grid-cols-[1.1fr_0.9fr] md:items-center">
+            <div>
+              <p className="inline-block rounded-full bg-black px-3 py-1 text-xs font-extrabold text-yellow-300">PROMOÇÃO ESPECIAL DE TESTE</p>
+              <h2 className="mt-2 text-3xl font-black leading-tight text-black md:text-4xl">
+                3 DIAS GRÁTIS EM TODOS OS PLANOS
+              </h2>
+              <p className="mt-2 text-sm font-semibold text-gray-700 md:text-base">
+                Teste agora sem pagar nada: Plano Padrão, Completo e Travel com acesso liberado para experimentar na prática.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold">
+                <span className="rounded-full bg-green-100 px-3 py-1 text-green-800">✅ Sem cartão para testar</span>
+                <span className="rounded-full bg-blue-100 px-3 py-1 text-blue-800">✅ Acesso imediato</span>
+                <span className="rounded-full bg-purple-100 px-3 py-1 text-purple-800">✅ Atendimento no WhatsApp</span>
+              </div>
+            </div>
+            <div className="rounded-xl bg-black p-4 text-center text-white">
+              <p className="text-xs font-bold uppercase tracking-wider text-yellow-300">Contagem da promoção</p>
+              <div className="mt-2 text-4xl font-black tracking-widest">{promoHours}:{promoMinutes}:{promoSeconds}</div>
+              <p className="mt-2 text-xs text-gray-300">Horas : Minutos : Segundos</p>
+              <a href={whatsappLink} target="_blank" rel="noreferrer" className="mt-3 inline-block rounded-lg bg-green-500 px-4 py-2 text-sm font-bold text-black hover:bg-green-600">
+                ATIVAR TESTE GRÁTIS AGORA
+              </a>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* Hero Section com Gatilhos */}
       <section className="relative overflow-hidden bg-gradient-to-b from-blue-900 to-blue-800 text-white py-16 md:py-24">
         <div className="container mx-auto px-4">
@@ -97,8 +136,7 @@ export default function Home() {
                 <p className="text-lg">✅ Finanças, gastos, metas e investimentos pelo WhatsApp</p>
                 <p className="text-lg">✅ Apoio nutricional e orientação comercial no mesmo assistente</p>
                 <p className="text-lg">✅ Plano Completo com FIPE, mercado financeiro e criptomoedas</p>
-                <p className="text-lg">✅ Plano Travel com busca de voos nacionais por texto ou áudio</p>
-                <p className="text-lg">✅ Padrão R$ 4,99 • Completo R$ 9,99 • Travel R$ 59,90/mês • Pix ou cartão</p>
+                <p className="text-lg">✅ Plano Padrão a partir de R$ 4,99/mês • Pix ou cartão</p>
               </div>
 
               <div className="flex flex-col sm:flex-row gap-4">
@@ -120,7 +158,7 @@ export default function Home() {
               </div>
 
               <p className="text-sm text-green-300 font-bold">
-                ✨ Padrão R$ 4,99 • Completo R$ 9,99 • Travel R$ 59,90 • Pix ou cartão
+                ✨ Promoção: 3 dias grátis em todos os planos • depois a partir de R$ 4,99/mês
               </p>
             </div>
 
@@ -145,9 +183,9 @@ export default function Home() {
                     <p>R$ 9,99</p>
                     <p className="text-black/70">Completo</p>
                   </div>
-                  <div className="rounded-xl bg-cyan-400 p-3 text-blue-950">
-                    <p>R$ 59,90</p>
-                    <p className="text-blue-950/70">Travel</p>
+                  <div className="rounded-xl bg-white/10 p-3">
+                    <p className="text-green-300">Pix/cartão</p>
+                    <p className="text-white/70">Ativação</p>
                   </div>
                 </div>
               </div>
@@ -479,7 +517,7 @@ export default function Home() {
             </p>
           </div>
 
-          <div className="grid md:grid-cols-3 gap-8 max-w-7xl mx-auto">
+          <div className="grid md:grid-cols-2 gap-8 max-w-5xl mx-auto">
             <div className="bg-white rounded-3xl border-2 border-blue-100 p-8 shadow-lg">
               <div className="mb-6">
                 <span className="bg-blue-100 text-blue-900 px-3 py-1 rounded-full text-sm font-bold">Plano Padrão</span>
@@ -535,41 +573,10 @@ export default function Home() {
                 </Button>
               </a>
             </div>
-
-            <div className="relative bg-gradient-to-br from-cyan-700 via-blue-900 to-blue-950 text-white rounded-3xl border-2 border-cyan-400 p-8 shadow-2xl overflow-hidden">
-              <div className="absolute top-0 right-0 bg-cyan-300 text-blue-950 px-5 py-2 rounded-bl-2xl font-bold text-sm flex items-center gap-1">
-                <Plane className="w-4 h-4" />
-                VOOS
-              </div>
-
-              <div className="mb-6">
-                <span className="bg-cyan-300 text-blue-950 px-3 py-1 rounded-full text-sm font-bold">Plano Travel</span>
-                <h3 className="text-3xl font-bold mt-4">Completo + viagens</h3>
-                <p className="text-cyan-100 mt-2">Tudo do Completo, mais assistente de viagens com busca de passagens aéreas.</p>
-              </div>
-
-              <div className="mb-6">
-                <span className="text-5xl font-bold text-cyan-300">R$ 59,90</span>
-                <span className="text-cyan-100">/mês</span>
-              </div>
-
-              <ul className="space-y-3 text-cyan-50 mb-8">
-                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-cyan-300 shrink-0" /> Tudo do Plano Completo</li>
-                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-cyan-300 shrink-0" /> Busca de voos nacionais no WhatsApp</li>
-                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-cyan-300 shrink-0" /> Assistente conversacional — diga destino ou tema (praia, Nordeste…)</li>
-                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-cyan-300 shrink-0" /> Funciona por texto ou áudio</li>
-              </ul>
-
-              <a href={whatsappLinkTravel} target="_blank" rel="noreferrer" className="block">
-                <Button size="lg" className="w-full bg-cyan-300 hover:bg-cyan-200 text-blue-950 font-bold">
-                  Assinar Travel por R$ 59,90
-                </Button>
-              </a>
-            </div>
           </div>
 
           <p className="text-center text-gray-500 mt-8">
-            Pagamento via cartão de crédito ou Pix. Ativação liberada após confirmação.
+            Promoção ativa: 3 dias grátis para testar qualquer plano. Após o período, escolha o plano ideal para continuar.
           </p>
         </div>
       </section>
@@ -644,14 +651,14 @@ export default function Home() {
               <summary className="font-bold text-lg text-blue-900">
                 💳 Preciso de cartão de crédito?
               </summary>
-              <p className="mt-4 text-gray-600">Não. Você pode pagar por Pix ou cartão de crédito. Padrão R$ 4,99/mês, Completo R$ 9,99/mês e Travel R$ 59,90/mês.</p>
+              <p className="mt-4 text-gray-600">Não. Você pode pagar por Pix ou cartão de crédito. O Plano Padrão custa R$ 4,99/mês e o Plano Completo custa R$ 9,99/mês.</p>
             </details>
 
             <details className="bg-white p-6 rounded-lg border-2 border-blue-900 cursor-pointer">
               <summary className="font-bold text-lg text-blue-900">
                 📊 Qual a diferença entre os planos?
               </summary>
-              <p className="mt-4 text-gray-600">O Padrão cobre finanças, nutrição e comercial. O Completo adiciona FIPE, mercado financeiro e criptomoedas. O Travel inclui tudo isso mais busca de voos e assistente de viagens no WhatsApp.</p>
+              <p className="mt-4 text-gray-600">O Padrão cobre finanças, nutrição e comercial pelo WhatsApp. O Completo adiciona Tabela FIPE, mercado financeiro, criptomoedas e recursos avançados.</p>
             </details>
 
             <details className="bg-white p-6 rounded-lg border-2 border-blue-900 cursor-pointer">
@@ -685,7 +692,7 @@ export default function Home() {
             ✅ Comece com um plano acessível
           </h2>
           <p className="text-lg">
-            Escolha entre Padrão (R$ 4,99), Completo (R$ 9,99) ou Travel (R$ 59,90), com pagamento por Pix ou cartão.
+            Escolha entre R$ 4,99/mês no Padrão ou R$ 9,99/mês no Completo, com pagamento por Pix ou cartão.
           </p>
         </div>
       </section>
@@ -724,7 +731,7 @@ export default function Home() {
           </div>
 
           <p className="text-sm text-green-300 font-bold">
-            ✨ Padrão R$ 4,99 • Completo R$ 9,99 • Travel R$ 59,90 • Pix ou cartão
+            ✨ Plano Padrão R$ 4,99 • Completo R$ 9,99 • Pix ou cartão
           </p>
 
           <div className="mt-12 grid gap-6 text-center md:grid-cols-3">

@@ -290,12 +290,18 @@ model ClientProfile {
   qrToken              String       @unique @default(uuid())
   assignedWhatsappAccountId Int?
   activatedAt          DateTime?
+  trialStartedAt       DateTime?
+  trialEndsAt          DateTime?
+  trialPromo48hSentAt  DateTime?
+  trialPromo60hSentAt  DateTime?
+  trialExpiredNotifiedAt DateTime?
   createdAt            DateTime     @default(now())
   updatedAt            DateTime     @updatedAt
 
   assignedWhatsappAccount GeneratedWhatsappAccount? @relation(fields: [assignedWhatsappAccountId], references: [id])
   subscription ClientSubscription?
   interactionLogs ClientInteractionLog[]
+  planChangeRequests PlanChangeRequest[]
 
   @@index([status, plan])
   @@index([assignedWhatsappAccountId])
@@ -318,6 +324,35 @@ enum ClientStatus {
   PENDING_ACTIVATION
   ACTIVE
   INACTIVE
+}
+
+enum PlanChangeRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELED
+}
+
+model PlanChangeRequest {
+  id                    Int                     @id @default(autoincrement())
+  clientId              Int
+  currentPlan           ClientPlan
+  requestedPlan         ClientPlan
+  status                PlanChangeRequestStatus @default(PENDING)
+  sourceChannel         String                  @default("whatsapp") @db.VarChar(20)
+  rawMessage            String?                 @db.Text
+  adminNote             String?                 @db.Text
+  handledByAdminId      String?
+  handledByAdminUsername String?
+  createdAt             DateTime                @default(now())
+  handledAt             DateTime?
+  updatedAt             DateTime                @updatedAt
+
+  client ClientProfile @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId, status, createdAt])
+  @@index([status, createdAt])
+  @@map("plan_change_requests")
 }
 
 // ─── Official WhatsApp Business API ─────────────────────────────────────────

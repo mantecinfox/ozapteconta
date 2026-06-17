@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { Prisma } from "@prisma/client";
+import { ClientPlan, Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { config } from "../config";
 import { logger } from "../utils/logger";
@@ -28,60 +28,26 @@ import { detectFipeQuery, getFipeHelp, FipeQueryResult } from "./fipeService";
 import { checkFipeSearchAllowed, runFipeQueryWithRateLimit } from "./fipeRateLimitService";
 import { detectFipeZapQuery, getFipeZapHelp, type FipeZapResult } from "./fipeZapService";
 import { checkFipeZapSearchAllowed, runFipeZapQueryWithRateLimit } from "./fipeZapRateLimitService";
+import { hasFullFeatures, hasFlightSearch, buildTravelPlanBlockMessage } from "./planAccessService";
 import { buildFullPhraseModelsMessage, buildHelpPhraseModelsPreview } from "./userPhraseModels";
 import { resolveSilhouette, getSilhouettePng } from "./vehicleSilhouetteService";
 import { getNutritionMealPng } from "./nutritionMealImageService";
 import { resolveWhatsappIdentity } from "./whatsappIdentityService";
 import infinityPayService from "./infinityPayService";
-import { applyBillingCycleFromPayment, syncSubscriptionBillingDates } from "./subscriptionBillingCycleService";
-import { interceptIfSubscriptionBlocked } from "./subscriptionAccessService";
-import {
-  buildOnboardingWelcomeMessage,
-  buildTypeStepRetryMessage,
-  resolveOnboardingDisplayName,
-  resolveWelcomeScenario,
-  shouldRestartOnboardingFlow,
-} from "./onboardingWelcomeService";
-import { detectFlightQuery, type FlightSearchResult } from "./flightSearchService";
-import { checkFlightSearchAllowed, runFlightSearchWithRateLimit } from "./flightRateLimitService";
-import {
-  buildFlightSearchIntro,
-  getFlightHelp,
-  handleFlightAssistantTurn,
-  isTravelRelatedQuery,
-  loadFlightWizard,
-} from "./flightAssistantService";
-import {
-  buildTravelPlanBlockMessage,
-  hasFlightSearch,
-  hasFullFeatures,
-} from "./planAccessService";
-import {
-  buildUnclearAudioPrompt,
-  isLikelyUnclearTranscript,
-} from "./zeroDriftResponderService";
 import { sendFinancialReportNow } from "./financialReportService";
 import { detectReportCommand, resolveEmailFromUtterance } from "./reportCommandUtils";
 import { enqueueAndWait } from "../queues/client";
 import { QUEUE_NAMES } from "../queues/names";
 import { phoneticNormalize } from "../utils/textTolerance";
 import { looksLikeNutritionMealList, countNumberedFoodItems } from "./nutritionRouting";
+import { detectCulturalEventsQuery, buscarEventosCulturais } from "./culturalEventsService";
 
 const ONBOARDING_TIMEOUT_MINUTES = 10;
 const AUDIO_PENDING_NOTICE_DELAY_MS = Number(process.env.WPP_AUDIO_NOTICE_DELAY_MS ?? 8000);
 const QUEUE_PROGRESS_INTERVAL_MS = Number(process.env.WPP_PROGRESS_INTERVAL_MS ?? 8000);
 const QUEUE_PROGRESS_MAX_NOTICES = Number(process.env.WPP_PROGRESS_MAX_NOTICES ?? 2);
-
-async function logClientInteraction(phone: string, intent: string, channel: "text" | "audio"): Promise<void> {
-  const profile = await prisma.clientProfile.findFirst({
-    where: { phone },
-    select: { id: true },
-  });
-  if (!profile) return;
-  await prisma.clientInteractionLog.create({
-    data: { clientId: profile.id, userPhone: phone, intent, channel },
-  });
-}
+const FREE_TRIAL_PROMO_ENABLED = process.env.FREE_TRIAL_PROMO_ENABLED !== "false";
+const FREE_TRIAL_HOURS = Math.max(1, Number(process.env.FREE_TRIAL_HOURS ?? 72));
 
 function scheduleAudioPendingNotice(phone: string): { cancel: () => void } {
   const timeoutRef = setTimeout(() => {
@@ -173,59 +139,26 @@ async function fetchCepDataWithRetries(cep: string, maxAttempts = 3): Promise<Re
   return null;
 }
 
-async function formatPlanPrice(planName: string, fallback: string): Promise<string> {
-  const planRow = await prisma.subscriptionPlan.findUnique({ where: { plan: planName as "HOME" | "FULL" | "TRAVEL" | "OFFICE" } });
-  return planRow ? Number(planRow.priceMonthly).toFixed(2).replace(".", ",") : fallback;
-}
-
 async function sendPlanOptions(phone: string) {
-  const [homePrice, fullPrice, travelPrice] = await Promise.all([
-    formatPlanPrice("HOME", "4,90"),
-    formatPlanPrice("FULL", "9,90"),
-    formatPlanPrice("TRAVEL", "59,90"),
-  ]);
+  const plans = await prisma.subscriptionPlan.findMany({ orderBy: { priceMonthly: "asc" } });
+  const fmt = (planName: string, def: string) => {
+    const p = plans.find((x) => x.plan === planName);
+    return p ? Number(p.priceMonthly).toFixed(2).replace(".", ",") : def;
+  };
   await sendMessage(
     phone,
     "🎯 *Escolha o seu plano:*\n\n" +
-      `1️⃣ *BÁSICO* — R$ ${homePrice}/mês\n   Contas a pagar/receber (PF e PJ)\n   _Sem FIPE, mercado ou voos_\n\n` +
-      `2️⃣ *COMPLETO* — R$ ${fullPrice}/mês\n   FIPE, FipeZap, mercado, IPCA/CDI e mais\n\n` +
-      `3️⃣ *TRAVEL* — R$ ${travelPrice}/mês\n   Tudo do Completo + *busca de voos* nacionais\n\n` +
-      "Digite *1*, *2* ou *3*:"
-  );
-}
-
-async function sendOnboardingWelcome(
-  phone: string,
-  clientMessage: string,
-  scenario: "new" | "returning",
-  displayName: string | undefined,
-  expiredReset: boolean,
-): Promise<void> {
-  await setRegistrationStep(phone, "type", {});
-  await sendMessage(
-    phone,
-    buildOnboardingWelcomeMessage({
-      clientMessage,
-      displayName,
-      scenario,
-      expiredReset,
-      timeoutMinutes: ONBOARDING_TIMEOUT_MINUTES,
-    }),
+      `1️⃣ *BÁSICO* — R$ ${fmt("HOME", "4,90")}/mês\n   Contas a pagar/receber (PF e PJ)\n   _Sem FIPE e sem Mercado Financeiro_\n\n` +
+      `2️⃣ *COMPLETO* — R$ ${fmt("FULL", "9,90")}/mês\n   FIPE, FipeZap, mercado, IPCA/CDI e mais\n\n` +
+      "Digite *1* ou *2*:"
   );
 }
 
 async function handleOnboarding(
-  user: {
-    registrationStep: string | null;
-    registrationData: unknown;
-    updatedAt: Date;
-    createdAt: Date;
-    name: string | null;
-  },
+  user: { registrationStep: string | null; registrationData: unknown; updatedAt: Date; createdAt: Date },
   phone: string,
   text: string,
-  aliases: string[] = [],
-  senderName?: string,
+  aliases: string[] = []
 ): Promise<boolean> {
   const candidatePhones = Array.from(new Set([phone, ...aliases].filter(Boolean)));
   const trimmed = text.trim();
@@ -233,15 +166,13 @@ async function handleOnboarding(
   let step = user.registrationStep;
   let regData = (user.registrationData || {}) as RegData;
   let expiredAndReset = false;
-  const displayName = resolveOnboardingDisplayName(user.name, senderName);
-  const greetingRestart = shouldRestartOnboardingFlow(trimmed);
 
   // Se o cadastro ficar parado por 10 minutos, limpa o estado e reinicia do zero.
   if (step && step !== "pending") {
     const referenceTime =
       regData.onboardingUpdatedAt
         ? new Date(regData.onboardingUpdatedAt)
-        : user.updatedAt;
+        : user.createdAt;
     const elapsedMs = nowMs - referenceTime.getTime();
     if (elapsedMs > ONBOARDING_TIMEOUT_MINUTES * 60 * 1000) {
       await prisma.whatsappUser.update({
@@ -272,35 +203,16 @@ async function handleOnboarding(
   }
 
   if (profile) {
-    if (
-      profile.status === "ACTIVE" &&
-      profile.subscription &&
-      ["ACTIVE", "SUSPENDED", "PAST_DUE"].includes(profile.subscription.status)
-    ) {
-      const blocked = await interceptIfSubscriptionBlocked(phone);
-      if (blocked) {
-        if (user.registrationStep) await setRegistrationStep(phone, null);
-        return true;
-      }
-      if (profile.subscription.status !== "ACTIVE") {
-        await prisma.clientSubscription.update({
-          where: { id: profile.subscription.id },
-          data: { status: "ACTIVE" },
-        });
-      }
+    if (profile.status === "ACTIVE" && profile.subscription?.status === "ACTIVE") {
       if (user.registrationStep) await setRegistrationStep(phone, null);
-      return false;
+      return false; // ativo — usa o sistema normalmente
     }
 
     if (profile.subscription?.status === "ACTIVE" && profile.status !== "ACTIVE") {
-      const activatedAt = new Date();
       await prisma.clientProfile.update({
         where: { id: profile.id },
-        data: { status: "ACTIVE", activatedAt },
+        data: { status: "ACTIVE", activatedAt: new Date() },
       });
-      if (profile.subscription.id) {
-        await syncSubscriptionBillingDates(profile.subscription.id);
-      }
       await setRegistrationStep(phone, null);
       await sendMessage(
         phone,
@@ -367,23 +279,19 @@ async function handleOnboarding(
   }
 
   // 2. Sem perfil — fluxo de cadastro passo a passo
-  const welcomeScenario = resolveWelcomeScenario({
-    registrationStep: step,
-    registrationData: regData as Record<string, unknown>,
-    createdAt: user.createdAt,
-    expiredReset: expiredAndReset,
-    greetingRestart,
-  });
-
-  // Saudação ou pedido de recomeço durante cadastro incompleto → recepção cordial do zero
-  if (step && step !== "pending" && greetingRestart) {
-    await sendOnboardingWelcome(phone, trimmed, welcomeScenario, displayName, expiredAndReset);
-    return true;
-  }
-
-  // Primeiro contato ou cadastro sem step ativo
+  // Primeiro contato
   if (!step) {
-    await sendOnboardingWelcome(phone, trimmed, welcomeScenario, displayName, expiredAndReset);
+    await setRegistrationStep(phone, "type", {});
+    await sendMessage(
+      phone,
+      (expiredAndReset
+        ? `⏱️ *Seu cadastro anterior expirou* por inatividade de mais de ${ONBOARDING_TIMEOUT_MINUTES} minutos.\n` +
+          `🗑️ Os dados parciais foram *anulados* e o cadastro foi *reiniciado do zero*.\n\n`
+        : "") +
+        "👋 *Bem-vindo ao ozapteconta!*\n\n" +
+        "Para usar nosso sistema, precisamos de um cadastro rápido.\n\n" +
+        "Você é:\n1️⃣ *Pessoa Física* (CPF)\n2️⃣ *Pessoa Jurídica* (CNPJ)\n\nDigite *1* ou *2*:"
+    );
     return true;
   }
 
@@ -391,10 +299,7 @@ async function handleOnboarding(
     case "type": {
       const choice = trimmed.replace(/\D/g, "");
       if (choice !== "1" && choice !== "2") {
-        await sendMessage(
-          phone,
-          buildTypeStepRetryMessage({ clientMessage: trimmed, displayName }),
-        );
+        await sendMessage(phone, "❌ Digite *1* para Pessoa Física ou *2* para Pessoa Jurídica:");
         return true;
       }
       const clientType: "PF" | "PJ" = choice === "1" ? "PF" : "PJ";
@@ -646,17 +551,16 @@ async function handleOnboarding(
 
     case "plan": {
       const choice = trimmed.replace(/\D/g, "");
-      const planMap: Record<string, { plan: "HOME" | "FULL" | "TRAVEL"; context: "PESSOAL" | "COMERCIAL" }> = {
+      const planMap: Record<string, { plan: "HOME" | "FULL"; context: "PESSOAL" | "COMERCIAL" }> = {
         "1": { plan: "HOME", context: "PESSOAL" },
         "2": { plan: "FULL", context: "PESSOAL" },
-        "3": { plan: "TRAVEL", context: "PESSOAL" },
       };
       const selected = planMap[choice];
       if (!selected) {
-        await sendMessage(phone, "❌ Opção inválida. Digite *1*, *2* ou *3*:");
+        await sendMessage(phone, "❌ Opção inválida. Digite *1* ou *2*:");
         return true;
       }
-      const defaultPrices = { HOME: 4.9, FULL: 9.9, TRAVEL: 59.9 };
+      const defaultPrices = { HOME: 4.9, FULL: 9.9 };
       const dbPlan = await prisma.subscriptionPlan.findUnique({ where: { plan: selected.plan } });
       const price = dbPlan ? Number(dbPlan.priceMonthly) : defaultPrices[selected.plan];
       const priceStr = price.toFixed(2).replace(".", ",");
@@ -710,6 +614,9 @@ async function handleOnboarding(
       }
 
       try {
+        const trialStartedAt = new Date();
+        const trialEndsAt = new Date(trialStartedAt.getTime() + FREE_TRIAL_HOURS * 60 * 60 * 1000);
+
         const created = await prisma.clientProfile.create({
           data: {
             clientType: d.clientType || "PF",
@@ -726,8 +633,11 @@ async function handleOnboarding(
             addressState: d.addressState,
             addressZipCode: d.addressZipCode,
             plan: selected.plan,
-            status: "PENDING_ACTIVATION",
+            status: FREE_TRIAL_PROMO_ENABLED ? "ACTIVE" : "PENDING_ACTIVATION",
             primaryContext: selected.context,
+            activatedAt: FREE_TRIAL_PROMO_ENABLED ? trialStartedAt : null,
+            trialStartedAt: FREE_TRIAL_PROMO_ENABLED ? trialStartedAt : null,
+            trialEndsAt: FREE_TRIAL_PROMO_ENABLED ? trialEndsAt : null,
           },
         });
 
@@ -735,8 +645,11 @@ async function handleOnboarding(
           data: {
             clientId: created.id,
             plan: selected.plan,
-            status: "PENDING",
+            status: FREE_TRIAL_PROMO_ENABLED ? "ACTIVE" : "PENDING",
             priceMonthly: price,
+            nextBillingDate: FREE_TRIAL_PROMO_ENABLED
+              ? trialEndsAt
+              : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
           },
         });
 
@@ -759,6 +672,32 @@ async function handleOnboarding(
         }
 
         const portalAccess = await issueClientPortalAccess(created.id, phone);
+
+        if (FREE_TRIAL_PROMO_ENABLED) {
+          await setRegistrationStep(phone, null, {});
+
+          const trialEndsAtBr = trialEndsAt.toLocaleString("pt-BR", {
+            day: "2-digit",
+            month: "2-digit",
+            year: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+            timeZone: "America/Sao_Paulo",
+          });
+
+          await sendMessage(
+            phone,
+            `🎉 *Cadastro aprovado com sucesso!*\n\n` +
+              `🚀 Promoção ativa: você ganhou *3 dias grátis* para testar o plano *${formatClientPlanName(selected.plan)}*.\n` +
+              `⏳ Seu período de teste vai até: *${trialEndsAtBr}*.\n\n` +
+              `🔐 *Seu acesso web:*\n` +
+              `Link: ${portalAccess.loginLink}\n` +
+              `Login: *${portalAccess.username}*\n` +
+              `Senha: *${portalAccess.password}*\n\n` +
+              `💡 Aproveite este período para testar tudo. Depois disso, você escolhe o plano ideal para continuar.`,
+          );
+          return true;
+        }
 
         await setRegistrationStep(phone, "pending", {});
         const pixKey = await getPixKey();
@@ -970,7 +909,11 @@ async function handleOnboarding(
     }
 
     default: {
-      await sendOnboardingWelcome(phone, trimmed, welcomeScenario, displayName, expiredAndReset);
+      await setRegistrationStep(phone, "type", {});
+      await sendMessage(
+        phone,
+        "👋 Olá! Vamos iniciar seu cadastro.\n\nVocê é:\n1️⃣ *Pessoa Física* (CPF)\n2️⃣ *Pessoa Jurídica* (CNPJ)\n\nDigite *1* ou *2*:"
+      );
       return true;
     }
   }
@@ -1096,8 +1039,6 @@ function detectCommand(text: string): string | null {
 
   if (/^(fipezap|fipe zap|ajuda fipezap|indice imovel|indice imobiliario)$/.test(t)) return "fipezap_help";
 
-  if (/^(voo|voos|passagem|passagens|ajuda voo|ajuda voos|busca voo|buscar voos?)$/.test(t)) return "flight_help";
-
   if (/^(indicadores|indices|macro|ajuda indicadores)$/.test(t)) return "macro_help";
 
   return null;
@@ -1107,38 +1048,95 @@ function extractEmailFromText(text: string): string | null {
   return resolveEmailFromUtterance(text).email;
 }
 
+type CulturalProfileLocation = {
+  addressStreet?: string | null;
+  addressNumber?: string | null;
+  addressNeighborhood?: string | null;
+  addressCity?: string | null;
+  addressState?: string | null;
+  addressZipCode?: string | null;
+};
+
+function buildCulturalAddress(profile: CulturalProfileLocation | null | undefined): string | undefined {
+  if (!profile) return undefined;
+
+  const parts = [
+    profile.addressStreet,
+    profile.addressNumber,
+    profile.addressNeighborhood,
+    profile.addressCity,
+    profile.addressState,
+    profile.addressZipCode,
+    "Brasil",
+  ]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean);
+
+  if (parts.length === 0) return undefined;
+  return parts.join(", ");
+}
+
+function buildCulturalPlanBlockMessage(canonicalPhone: string): string {
+  return buildFullUpgradePrompt("Agenda Cultural e eventos locais", canonicalPhone);
+}
+
+async function resolveCulturalEventsSafely(params: {
+  termoBusca: string;
+  cidadeOuEstado: string | null;
+  filtroTempo: "hoje" | "amanha" | "fim_de_semana" | null;
+  buscaPorGeolocalizacao: boolean;
+  cepOuEnderecoCliente?: string;
+  phoneForLogs: string;
+}): Promise<string> {
+  try {
+    return await buscarEventosCulturais({
+      termoBusca: params.termoBusca,
+      cidadeOuEstado: params.cidadeOuEstado,
+      limiteResultados: 5,
+      filtroTempo: params.filtroTempo,
+      buscaPorGeolocalizacao: params.buscaPorGeolocalizacao,
+      cepOuEnderecoCliente: params.cepOuEnderecoCliente,
+    });
+  } catch (err) {
+    logger.error(`[cultural-events] falha na busca para ${params.phoneForLogs}: ${String(err)}`);
+    return (
+      `⚠️ Não consegui consultar a agenda cultural agora.` +
+      `\n\nTente novamente em alguns instantes com algo como:` +
+      `\n• *shows em belo horizonte*` +
+      `\n• *teatro perto de mim*`
+    );
+  }
+}
+
 async function executeReportEmailFlow(
   canonicalPhone: string,
   text: string,
   options?: { audioPrefix?: boolean },
 ): Promise<string> {
-  const resolved = resolveEmailFromUtterance(text);
   const prefix = options?.audioPrefix ? `🎤 _"${text}"_\n\n` : "";
 
-  if (!resolved.email) {
-    if (resolved.suggestedEmail) {
-      return (
-        `${prefix}📧 Quase lá! O e-mail pareceu incompleto na transcrição.\n\n` +
-        `Você quis dizer *${resolved.suggestedEmail}*?\n\n` +
-        `Confirme em texto:\n` +
-        `• _enviar pdf do resumo para email ${resolved.suggestedEmail}_`
-      );
-    }
+  /* SANITY CHECK: Garante que o e-mail utilizado seja exclusivamente o do cadastro do cliente */
+  const profile = await prisma.clientProfile.findFirst({
+    where: { phone: canonicalPhone },
+    select: { email: true },
+  });
+
+  const registeredEmail = profile?.email;
+
+  if (!registeredEmail) {
     return (
-      `${prefix}📧 Para enviar o PDF das contas por e-mail, preciso do endereço completo.\n\n` +
-      `Exemplos:\n` +
-      `• _enviar pdf do resumo para email nome@dominio.com_\n` +
-      `• _enviar pdf das contas para email mantecinfox@gmail.com_`
+      `${prefix}📧 Notei que você ainda não tem um e-mail cadastrado no seu perfil.\n\n` +
+      `Por favor, atualize seu cadastro ou contate o suporte antes de solicitar o relatório por e-mail.`
     );
   }
 
   await sendMessage(
     canonicalPhone,
-    `${prefix}📨 Recebi seu pedido. Estou preparando o PDF das suas contas para *${resolved.email}*. ` +
+    `${prefix}📨 Recebi seu pedido. Estou preparando o PDF das suas contas para o e-mail do seu cadastro (*${registeredEmail}*). ` +
       "Aguarde alguns instantes.",
   );
 
-  const reportResult = await sendFinancialReportNow(canonicalPhone, resolved.email);
+  const reportResult = await sendFinancialReportNow(canonicalPhone);
   await learnFromTurn({
     text,
     intent: "report",
@@ -1433,6 +1431,7 @@ function shouldSkipFinanceExtraction(text: string): boolean {
   if (detectFipeZapQuery(text)) return true;
   if (detectInvestmentQuery(text)) return true;
   if (isPriceSearchQuery(text)) return true;
+  if (detectCulturalEventsQuery(text)) return true;
 
   const normalized = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   const openQuestion =
@@ -2024,12 +2023,8 @@ async function resolveGenericAssistantResponse(
   }
 
   if (!evolutiveHandled) {
-    const classifiedIntent = preClassification?.intent ?? "unknown";
     response =
-      (await generateGeneralResponse(text, history, {
-        intent: classifiedIntent,
-        userName: senderName,
-      })) ??
+      (await generateGeneralResponse(text, history)) ??
       GENERIC_ASSISTANT_FALLBACK;
   }
 
@@ -2425,6 +2420,67 @@ function cmdHelp(text: string, senderName?: string): string {
   );
 }
 
+function pickMessageVariant(seed: string, totalVariants: number): number {
+  const normalized = String(seed || "").trim();
+  if (!normalized) return 0;
+
+  let hash = 0;
+  for (let i = 0; i < normalized.length; i += 1) {
+    hash = (hash * 31 + normalized.charCodeAt(i)) >>> 0;
+  }
+
+  return hash % totalVariants;
+}
+
+function buildFullUpgradePrompt(featureLabel: string, canonicalPhone: string): string {
+  const variant = pickMessageVariant(canonicalPhone, 5);
+  const header = `🔒 *${featureLabel}* está disponível no plano *Completo (R$ 9,99/mês)*.`;
+
+  const variants: string[] = [
+    header +
+      `\n\nSeu plano atual é o *Básico (R$ 4,99/mês)*, ideal para contas a pagar/receber (PF e PJ).\n\n` +
+      `📈 *Com o Completo, você ganha visão mais estratégica do seu dinheiro*:\n` +
+      `• indicadores como IPCA/CDI\n` +
+      `• cotações e análises de mercado\n` +
+      `• consultas FIPE e FipeZap\n\n` +
+      `Se quiser liberar agora, responda: *quero mudar para completo*.`,
+
+    header +
+      `\n\nHoje você já controla entradas e saídas no *Básico*. O *Completo* adiciona inteligência para você antecipar decisões.\n\n` +
+      `🎯 *Benefícios imediatos do upgrade*:\n` +
+      `• leitura de cenário com IPCA/CDI\n` +
+      `• cotações para agir no melhor momento\n` +
+      `• FIPE/FipeZap para decisões de compra e venda\n\n` +
+      `Quer evoluir seu controle financeiro? Responda: *quero mudar para completo*.`,
+
+    header +
+      `\n\nVocê está a um passo de transformar controle em *vantagem financeira*.\n\n` +
+      `🚀 *No Completo você desbloqueia*:\n` +
+      `• dados de mercado em tempo real\n` +
+      `• indicadores macro para decisões seguras\n` +
+      `• FIPE/FipeZap para comparar com confiança\n\n` +
+      `Para ativar em poucos minutos, responda: *quero mudar para completo*.`,
+
+    header +
+      `\n\nSeu plano *Básico* atende o operacional. O *Completo* entrega visão para crescer com mais previsibilidade.\n\n` +
+      `📊 *O que muda na prática*:\n` +
+      `• menos decisão no "achismo"\n` +
+      `• mais clareza sobre inflação, juros e preços\n` +
+      `• acesso a FIPE/FipeZap no mesmo atendimento\n\n` +
+      `Se fizer sentido para você, responda: *quero mudar para completo*.`,
+
+    header +
+      `\n\nQuem usa o *Completo* normalmente ganha mais agilidade e segurança nas decisões do dia a dia.\n\n` +
+      `💼 *Resumo do upgrade*:\n` +
+      `• mercado financeiro (CDI, IPCA, cotações)\n` +
+      `• consultas FIPE e FipeZap\n` +
+      `• análise mais completa para proteger margem e caixa\n\n` +
+      `Para ativar agora, responda: *quero mudar para completo*.`,
+  ];
+
+  return variants[variant] || variants[0];
+}
+
 // ─── Agendar lembretes ────────────────────────────────────────────────────────
 async function scheduleReminders(phone: string, transactionId: number, vencimento: Date) {
   const now = new Date();
@@ -2453,78 +2509,176 @@ async function scheduleReminders(phone: string, transactionId: number, venciment
   }
 }
 
-// ─── Assistente de viagens (texto ou áudio) ───────────────────────────────────
-async function handleFlightAssistantRoute(
+function hasPlanChangeIntent(text: string): boolean {
+  const normalized = phoneticNormalize(text).toLowerCase();
+  return (
+    /\b(modificar|mudar|trocar|alterar|upgrade|downgrade)\b.{0,24}\bplano\b/.test(normalized) ||
+    /\bplano\b.{0,24}\b(modificar|mudar|trocar|alterar|upgrade|downgrade)\b/.test(normalized)
+  );
+}
+
+function formatClientPlanName(plan: ClientPlan): string {
+  switch (plan) {
+    case "TRAVEL":
+      return "Travel";
+    case "OFFICE":
+      return "Office";
+    case "FULL":
+      return "Completo";
+    case "HOME":
+    default:
+      return "Básico";
+  }
+}
+
+function formatPlanPriceBRL(price: number): string {
+  return `R$ ${price.toFixed(2).replace(".", ",")}`;
+}
+
+function planRequestKeyword(plan: ClientPlan): string {
+  switch (plan) {
+    case "TRAVEL":
+      return "travel";
+    case "OFFICE":
+      return "office";
+    case "FULL":
+      return "completo";
+    case "HOME":
+    default:
+      return "basico";
+  }
+}
+
+async function buildPlanChangeOptionsMessage(canonicalPhone: string): Promise<string | null> {
+  const client = await prisma.clientProfile.findUnique({
+    where: { phone: canonicalPhone },
+    select: {
+      plan: true,
+      subscription: {
+        select: {
+          nextBillingDate: true,
+        },
+      },
+    },
+  });
+
+  if (!client) return null;
+
+  const plans = await prisma.subscriptionPlan.findMany({
+    orderBy: { priceMonthly: "asc" },
+    select: { plan: true, priceMonthly: true },
+  });
+
+  const options = plans.filter((p) => p.plan !== client.plan);
+
+  const optionsText = options.length
+    ? options
+      .map((p) => {
+        const plan = p.plan as ClientPlan;
+        return `• *${formatClientPlanName(plan)}* — ${formatPlanPriceBRL(Number(p.priceMonthly))}/mês\n   Ex.: _quero mudar para ${planRequestKeyword(plan)}_`;
+      })
+      .join("\n\n")
+    : "• Não encontrei outros planos disponíveis no momento.";
+
+  const nextBillingInfo = client.subscription?.nextBillingDate
+    ? `\n📅 Seu vencimento atual: ${new Date(client.subscription.nextBillingDate).toLocaleDateString("pt-BR")}`
+    : "";
+
+  return (
+    `📦 *Mudança de plano*\n\n` +
+    `Seu plano atual: *${formatClientPlanName(client.plan)}*${nextBillingInfo}\n\n` +
+    `Você pode trocar para:\n\n${optionsText}\n\n` +
+    `💳 *Regras de cobrança:*\n` +
+    `• Plano menor → maior: paga o valor integral do novo plano.\n` +
+    `• Plano maior → menor: não paga agora se estiver dentro do prazo não vencido.\n\n` +
+    `Digite no formato: _quero mudar para completo_`
+  );
+}
+
+function resolveRequestedPlanFromText(text: string): ClientPlan | null {
+  const normalized = phoneticNormalize(text).toLowerCase();
+  if (!hasPlanChangeIntent(text)) return null;
+
+  const toPlanToken = normalized.match(/\b(?:para|pra|pro)\s+(travel|office|full|completo|home|basico|essencial|padrao)\b/);
+  const token = toPlanToken?.[1]
+    || (normalized.includes("travel") ? "travel" : "")
+    || (normalized.includes("office") ? "office" : "")
+    || (normalized.includes("full") || normalized.includes("completo") ? "full" : "")
+    || (normalized.includes("home") || normalized.includes("basico") || normalized.includes("essencial") || normalized.includes("padrao") ? "home" : "");
+
+  switch (token) {
+    case "travel":
+      return "TRAVEL";
+    case "office":
+      return "OFFICE";
+    case "full":
+    case "completo":
+      return "FULL";
+    case "home":
+    case "basico":
+    case "essencial":
+    case "padrao":
+      return "HOME";
+    default:
+      return null;
+  }
+}
+
+async function registerPlanChangeRequestViaWhatsapp(
   canonicalPhone: string,
-  text: string,
-  history: AIMessage[],
-  canSearchFlights: boolean,
-  options?: { messagePrefix?: string; userContextContent?: string },
-): Promise<boolean> {
-  const flightWizardActive = Boolean(await loadFlightWizard(canonicalPhone));
-  const flightIntent =
-    flightWizardActive ||
-    isTravelRelatedQuery(text) ||
-    Boolean(detectFlightQuery(text));
-  if (!flightIntent) return false;
+  rawText: string,
+  requestedPlan: ClientPlan,
+): Promise<string | null> {
+  const client = await prisma.clientProfile.findUnique({
+    where: { phone: canonicalPhone },
+    select: { id: true, fullName: true, plan: true },
+  });
 
-  const prefix = options?.messagePrefix || "";
-  const userContent = options?.userContextContent || text;
+  if (!client) return null;
 
-  if (!canSearchFlights) {
-    await sendMessage(
-      canonicalPhone,
-      prefix + (await buildTravelPlanBlockMessage(() => formatPlanPrice("TRAVEL", "59,90"))),
-    );
-    return true;
+  if (client.plan === requestedPlan) {
+    return `📌 Você já está no plano *${formatClientPlanName(requestedPlan)}*. Se quiser, posso te ajudar com os recursos desse plano.`;
   }
 
-  const flightTurn = await handleFlightAssistantTurn(canonicalPhone, text);
+  const pendingRequest = await prisma.planChangeRequest.findFirst({
+    where: {
+      clientId: client.id,
+      status: "PENDING",
+    },
+    orderBy: { createdAt: "desc" },
+  });
 
-  if (flightTurn.kind === "reply") {
-    const message = prefix + flightTurn.message;
-    await saveContext(canonicalPhone, [
-      ...history,
-      { role: "user", content: userContent },
-      { role: "assistant", content: message },
-    ]);
-    await sendMessage(canonicalPhone, message);
-    return true;
+  if (pendingRequest?.requestedPlan === requestedPlan) {
+    return `✅ Seu pedido de mudança para o plano *${formatClientPlanName(requestedPlan)}* já está registrado e aguardando análise do admin.`;
   }
 
-  if (flightTurn.kind === "search") {
-    const flightLimit = await checkFlightSearchAllowed(canonicalPhone);
-    if (!flightLimit.allowed) {
-      await sendMessage(canonicalPhone, prefix + flightLimit.message);
-      return true;
-    }
-
-    await sendMessage(canonicalPhone, prefix + buildFlightSearchIntro(flightTurn.query));
-
-    const flightResult = await runQueuedWithProgress<FlightSearchResult>(
-      canonicalPhone,
-      "busca de voos",
-      async () => enqueueAndWait(QUEUE_NAMES.FLIGHTS, {
-        phone: canonicalPhone,
-        flightQuery: flightTurn.query,
-      }, {
-        dedupKey: `flight_${canonicalPhone}_${flightTurn.query.originCode}_${flightTurn.query.destinationCode}_${flightTurn.query.outboundDate}`.slice(0, 180),
-        timeoutMs: 150000,
-      }) as Promise<FlightSearchResult>,
-      async () => runFlightSearchWithRateLimit(canonicalPhone, flightTurn.query),
-    );
-
-    const resultMessage = prefix ? `${prefix}${flightResult.message}` : flightResult.message;
-    await saveContext(canonicalPhone, [
-      ...history,
-      { role: "user", content: userContent },
-      { role: "assistant", content: resultMessage },
-    ]);
-    await sendMessage(canonicalPhone, resultMessage);
-    return true;
+  if (pendingRequest) {
+    await prisma.planChangeRequest.update({
+      where: { id: pendingRequest.id },
+      data: {
+        status: "CANCELED",
+        adminNote: "Solicitação anterior substituída por um novo pedido via WhatsApp.",
+        handledAt: new Date(),
+      },
+    });
   }
 
-  return false;
+  await prisma.planChangeRequest.create({
+    data: {
+      clientId: client.id,
+      currentPlan: client.plan,
+      requestedPlan,
+      status: "PENDING",
+      sourceChannel: "whatsapp",
+      rawMessage: rawText,
+    },
+  });
+
+  return (
+    `✅ Pedido recebido!\n\n` +
+    `Sua solicitação de mudança de plano para *${formatClientPlanName(requestedPlan)}* foi enviada ao administrador.\n` +
+    `Assim que for analisada, você recebe confirmação por aqui.`
+  );
 }
 
 // ─── Processar mensagem de texto ──────────────────────────────────────────────
@@ -2544,13 +2698,9 @@ export async function processText(phone: string, senderName: string | undefined,
   }
 
   // Gate 1: cadastro completo + Gate 2: plano ativo
-  const intercepted = await handleOnboarding(user, canonicalPhone, text, identity.aliases, senderName);
+  const intercepted = await handleOnboarding(user, canonicalPhone, text, identity.aliases);
   if (intercepted) return;
 
-  // Log de interação para analytics (fire-and-forget)
-  if (intentClassification?.intent) {
-    logClientInteraction(canonicalPhone, intentClassification.intent, "text").catch(() => {});
-  }
 
   // Gate 3: resposta a método de pagamento pendente
   if (user.registrationStep === "pending_payment_method") {
@@ -2581,11 +2731,48 @@ export async function processText(phone: string, senderName: string | undefined,
   const command = detectCommand(text);
   const clientProfile = await prisma.clientProfile.findUnique({
     where: { phone: canonicalPhone },
-    select: { plan: true },
+    select: {
+      plan: true,
+      addressStreet: true,
+      addressNumber: true,
+      addressNeighborhood: true,
+      addressCity: true,
+      addressState: true,
+      addressZipCode: true,
+    },
   });
   const clientPlan = clientProfile?.plan ?? "HOME";
-  const lacksFullFeatures = !hasFullFeatures(clientPlan);
+  const hasFullFeat = hasFullFeatures(clientPlan);
   const canSearchFlights = hasFlightSearch(clientPlan);
+  const isBasicPlan = !hasFullFeat;
+
+  const planChangeIntent = hasPlanChangeIntent(text);
+  const requestedPlan = resolveRequestedPlanFromText(text);
+  if (planChangeIntent && !requestedPlan) {
+    const planOptionsMessage = await buildPlanChangeOptionsMessage(canonicalPhone);
+    if (planOptionsMessage) {
+      await saveContext(canonicalPhone, [
+        ...history,
+        { role: "user", content: text },
+        { role: "assistant", content: planOptionsMessage },
+      ]);
+      await sendMessage(canonicalPhone, planOptionsMessage);
+      return;
+    }
+  }
+
+  if (requestedPlan) {
+    const planRequestMessage = await registerPlanChangeRequestViaWhatsapp(canonicalPhone, text, requestedPlan);
+    if (planRequestMessage) {
+      await saveContext(canonicalPhone, [
+        ...history,
+        { role: "user", content: text },
+        { role: "assistant", content: planRequestMessage },
+      ]);
+      await sendMessage(canonicalPhone, planRequestMessage);
+      return;
+    }
+  }
 
   let response = "";
 
@@ -2625,25 +2812,25 @@ export async function processText(phone: string, senderName: string | undefined,
     const reportResult = await sendFinancialReportNow(canonicalPhone);
     response = reportResult.message;
   } else if (command === "market_help") {
-    response = lacksFullFeatures
-      ? "🔒 Recurso disponível apenas no plano *Completo (R$ 9,90)*.\n\nNo plano básico você pode usar contas a pagar e a receber normalmente."
+    response = isBasicPlan
+      ? buildFullUpgradePrompt("Mercado Financeiro", canonicalPhone)
       : getMarketHelp();
   } else if (command === "fipe_help") {
-    response = lacksFullFeatures
-      ? "🔒 Consulta FIPE disponível apenas no plano *Completo (R$ 9,90)*.\n\nNo plano básico você pode usar contas a pagar e a receber normalmente."
+    response = isBasicPlan
+      ? buildFullUpgradePrompt("Consulta FIPE", canonicalPhone)
       : getFipeHelp();
   } else if (command === "fipezap_help") {
-    response = lacksFullFeatures
-      ? "🔒 Consulta FipeZap disponível apenas no plano *Completo (R$ 9,90)*."
+    response = isBasicPlan
+      ? buildFullUpgradePrompt("Consulta FipeZap", canonicalPhone)
       : getFipeZapHelp();
   } else if (command === "macro_help") {
-    response = lacksFullFeatures
-      ? "🔒 Indicadores macro disponíveis apenas no plano *Completo (R$ 9,90)*."
+    response = isBasicPlan
+      ? buildFullUpgradePrompt("Indicadores Macro", canonicalPhone)
       : getMacroHelp();
   } else if (command === "flight_help") {
-    response = canSearchFlights
-      ? getFlightHelp()
-      : await buildTravelPlanBlockMessage(() => formatPlanPrice("TRAVEL", "59,90"));
+    response = !canSearchFlights
+      ? await buildTravelPlanBlockMessage(async () => "59,90", canonicalPhone)
+      : "✈️ *Busca de Voos* — Encontre passagens aéreas nacionais com preços, horários e companhias.\n\nExemplos: 'voo SP para RJ', 'passagem São Paulo Rio de Janeiro'";
   } else {
     // ── Calculadora de Metabolismo/IMC (prioridade máxima — antes do menu) ──────
     if (isBMRQuery(text) || isChoosingBMRFromMenu(text, history) || isBMRFollowUp(text, history)) {
@@ -2740,22 +2927,11 @@ export async function processText(phone: string, senderName: string | undefined,
       return;
     }
 
-    const handledFlight = await handleFlightAssistantRoute(
-      canonicalPhone,
-      text,
-      history,
-      canSearchFlights,
-    );
-    if (handledFlight) return;
-
     // ── Consulta FIPE (antes da IA) ───────────────────────────────────────────
     const fipeQuery = detectFipeQuery(text);
     if (fipeQuery) {
-      if (lacksFullFeatures) {
-        await sendMessage(
-          canonicalPhone,
-          "🔒 A consulta FIPE é um recurso do plano *Completo (R$ 9,90)*.\n\nSeu plano atual continua com contas a pagar/receber para PF e PJ.",
-        );
+      if (isBasicPlan) {
+        await sendMessage(canonicalPhone, buildFullUpgradePrompt("Tabela FIPE", canonicalPhone));
         return;
       }
       const limitPreview = await checkFipeSearchAllowed(canonicalPhone, fipeQuery.vehicleType);
@@ -2784,11 +2960,8 @@ export async function processText(phone: string, senderName: string | undefined,
     // ── Consulta FipeZap (imóveis) ────────────────────────────────────────────
     const fipeZapQuery = detectFipeZapQuery(text);
     if (fipeZapQuery) {
-      if (lacksFullFeatures) {
-        await sendMessage(
-          canonicalPhone,
-          "🔒 A consulta FipeZap é um recurso do plano *Completo (R$ 9,90)*.",
-        );
+      if (isBasicPlan) {
+        await sendMessage(canonicalPhone, buildFullUpgradePrompt("FipeZap e Indicadores Macro", canonicalPhone));
         return;
       }
       const fipeZapLimit = await checkFipeZapSearchAllowed(canonicalPhone);
@@ -2818,11 +2991,8 @@ export async function processText(phone: string, senderName: string | undefined,
     // ── Análise de Investimentos (IA + dados reais) ───────────────────────────
     const investQuery = detectInvestmentQuery(text);
     if (investQuery) {
-      if (lacksFullFeatures) {
-        await sendMessage(
-          canonicalPhone,
-          "🔒 Análise de Investimentos é um recurso do plano *Completo (R$ 9,90)*.\n\nAtualize seu plano para acessar análises de ações, criptomoedas e sugestões de investimento.",
-        );
+      if (isBasicPlan) {
+        await sendMessage(canonicalPhone, buildFullUpgradePrompt("Análise de Investimentos", canonicalPhone));
         return;
       }
 
@@ -2881,11 +3051,8 @@ export async function processText(phone: string, senderName: string | undefined,
     // ── Consulta de mercado financeiro (antes da IA) ──────────────────────────
     const marketQuery = detectMarketQuery(text);
     if (marketQuery) {
-      if (lacksFullFeatures) {
-        await sendMessage(
-          canonicalPhone,
-          "🔒 Mercado Financeiro é um recurso do plano *Completo (R$ 9,90)*.\n\nSeu plano atual continua com contas a pagar/receber para PF e PJ.",
-        );
+      if (isBasicPlan) {
+        await sendMessage(canonicalPhone, buildFullUpgradePrompt("Mercado Financeiro (CDI, IPCA e cotações)", canonicalPhone));
         return;
       }
       // Cotações e resumo de mercado precisam buscar dados externos
@@ -2904,6 +3071,38 @@ export async function processText(phone: string, senderName: string | undefined,
         async () => executeMarketQuery(marketQuery),
       );
       await sendMessage(canonicalPhone, response);
+      return;
+    }
+
+    // ── Agenda cultural (Mapas Culturais) ─────────────────────────────────────
+    const culturalQuery = detectCulturalEventsQuery(text);
+    if (culturalQuery) {
+      if (!hasFullFeat) {
+        await sendMessage(canonicalPhone, buildCulturalPlanBlockMessage(canonicalPhone));
+        return;
+      }
+
+      const enderecoCliente = buildCulturalAddress(clientProfile);
+      const localidadeCliente = [clientProfile?.addressCity, clientProfile?.addressState]
+        .map((v) => String(v || "").trim())
+        .filter(Boolean)
+        .join(", ") || null;
+
+      const respostaCultural = await resolveCulturalEventsSafely({
+        termoBusca: culturalQuery.termoBusca,
+        cidadeOuEstado: culturalQuery.cidadeOuEstado || localidadeCliente,
+        filtroTempo: culturalQuery.filtroTempo,
+        buscaPorGeolocalizacao: culturalQuery.buscaPorGeolocalizacao,
+        cepOuEnderecoCliente: enderecoCliente,
+        phoneForLogs: canonicalPhone,
+      });
+
+      await saveContext(canonicalPhone, [
+        ...history,
+        { role: "user", content: text },
+        { role: "assistant", content: respostaCultural },
+      ]);
+      await sendMessage(canonicalPhone, respostaCultural);
       return;
     }
 
@@ -3125,12 +3324,10 @@ export async function processText(phone: string, senderName: string | undefined,
           }
 
           if (!evolutiveHandled) {
+            // IA generalista — responde qualquer pergunta contextualmente
             await sendLoadingMessage(canonicalPhone, "general_ai");
             response =
-              (await generateGeneralResponse(text, history, {
-                intent: intentClassification?.intent ?? "unknown",
-                userName: senderName,
-              })) ??
+              (await generateGeneralResponse(text, history)) ??
               GENERIC_ASSISTANT_FALLBACK;
           }
         }
@@ -3167,10 +3364,8 @@ export async function processAudioBuffer(
     if (!claimAudioProcessing(canonicalPhone, mediaId)) return;
 
     const user = await getOrCreateUser(canonicalPhone, senderName, identity.aliases);
-    const intercepted = await handleOnboarding(user, canonicalPhone, "[áudio]", identity.aliases, senderName);
+    const intercepted = await handleOnboarding(user, canonicalPhone, "[áudio]", identity.aliases);
     if (intercepted) return;
-
-    logClientInteraction(canonicalPhone, "audio_message", "audio").catch(() => {});
 
     const stopComposing = await startComposingIndicator(canonicalPhone);
     const pendingNotice = scheduleAudioPendingNotice(canonicalPhone);
@@ -3201,7 +3396,15 @@ export async function processAudioBuffer(
       const history = parseContext(freshUser?.conversationContext);
       const cp = await prisma.clientProfile.findUnique({
         where: { phone: canonicalPhone },
-        select: { plan: true },
+        select: {
+          plan: true,
+          addressStreet: true,
+          addressNumber: true,
+          addressNeighborhood: true,
+          addressCity: true,
+          addressState: true,
+          addressZipCode: true,
+        },
       });
       const allowedContexts: ("PESSOAL" | "COMERCIAL")[] =
         cp?.plan === "OFFICE" ? ["PESSOAL", "COMERCIAL"] : ["PESSOAL", "COMERCIAL"];
@@ -3217,12 +3420,6 @@ export async function processAudioBuffer(
           canonicalPhone,
           "⚠️ Não consegui entender o áudio. Pode reenviar ou mandar em texto simples?",
         );
-        return;
-      }
-
-      if (isLikelyUnclearTranscript(transcription)) {
-        pendingNotice.cancel();
-        await sendMessage(canonicalPhone, buildUnclearAudioPrompt(["finanças", "nutrição"]));
         return;
       }
 
@@ -3298,22 +3495,6 @@ export async function processAudioBuffer(
         return;
       }
 
-      const audioCanSearchFlights = hasFlightSearch(cp?.plan ?? "HOME");
-      const flightHandled = await handleFlightAssistantRoute(
-        canonicalPhone,
-        transcription,
-        history,
-        audioCanSearchFlights,
-        {
-          messagePrefix: `🎤 _"${transcription}"_\n\n`,
-          userContextContent: `[áudio] ${transcription}`,
-        },
-      );
-      if (flightHandled) {
-        pendingNotice.cancel();
-        return;
-      }
-
       if (isBMRQuery(transcription) || isChoosingBMRFromMenu(transcription, history) || isBMRFollowUp(transcription, history)) {
         const response = `🎤 _"${transcription}"_\n\n${formatBMRResponse(transcription)}`;
         await saveContext(canonicalPhone, [
@@ -3322,6 +3503,44 @@ export async function processAudioBuffer(
           { role: "assistant", content: response },
         ]);
         await sendMessage(canonicalPhone, response);
+        return;
+      }
+
+      const audioCulturalQuery = detectCulturalEventsQuery(transcription);
+      if (audioCulturalQuery) {
+        if (!hasFullFeatures(cp?.plan ?? "HOME")) {
+          const blocked = `🎤 _"${transcription}"_\n\n${buildCulturalPlanBlockMessage(canonicalPhone)}`;
+          await saveContext(canonicalPhone, [
+            ...history,
+            { role: "user", content: `[áudio] ${transcription}` },
+            { role: "assistant", content: blocked },
+          ]);
+          await sendMessage(canonicalPhone, blocked);
+          return;
+        }
+
+        const enderecoCliente = buildCulturalAddress(cp);
+        const localidadeCliente = [cp?.addressCity, cp?.addressState]
+          .map((v) => String(v || "").trim())
+          .filter(Boolean)
+          .join(", ") || null;
+
+        const respostaCultural = await resolveCulturalEventsSafely({
+          termoBusca: audioCulturalQuery.termoBusca,
+          cidadeOuEstado: audioCulturalQuery.cidadeOuEstado || localidadeCliente,
+          filtroTempo: audioCulturalQuery.filtroTempo,
+          buscaPorGeolocalizacao: audioCulturalQuery.buscaPorGeolocalizacao,
+          cepOuEnderecoCliente: enderecoCliente,
+          phoneForLogs: canonicalPhone,
+        });
+
+        const formatted = `🎤 _"${transcription}"_\n\n${respostaCultural}`;
+        await saveContext(canonicalPhone, [
+          ...history,
+          { role: "user", content: `[áudio] ${transcription}` },
+          { role: "assistant", content: formatted },
+        ]);
+        await sendMessage(canonicalPhone, formatted);
         return;
       }
 
@@ -3562,10 +3781,8 @@ export async function processAudio(
   const user = await getOrCreateUser(canonicalPhone, senderName, identity.aliases);
 
   // Gate: cadastro completo + plano ativo
-  const intercepted = await handleOnboarding(user, canonicalPhone, "[áudio]", identity.aliases, senderName);
+  const intercepted = await handleOnboarding(user, canonicalPhone, "[áudio]", identity.aliases);
   if (intercepted) return;
-
-  logClientInteraction(canonicalPhone, "audio_message", "audio").catch(() => {});
 
   // Baixa o áudio
   const media = await downloadMedia(mediaId);
@@ -3600,7 +3817,15 @@ export async function processAudio(
 
   const audioClientProfile = await prisma.clientProfile.findUnique({
     where: { phone: canonicalPhone },
-    select: { plan: true },
+    select: {
+      plan: true,
+      addressStreet: true,
+      addressNumber: true,
+      addressNeighborhood: true,
+      addressCity: true,
+      addressState: true,
+      addressZipCode: true,
+    },
   });
   const audioAllowedContexts: ("PESSOAL" | "COMERCIAL")[] =
     audioClientProfile?.plan === "OFFICE" ? ["PESSOAL", "COMERCIAL"] : ["PESSOAL", "COMERCIAL"];
@@ -3656,19 +3881,43 @@ export async function processAudio(
   }
 
   if (transcription) {
-    const audioCanSearchFlights = hasFlightSearch(audioClientProfile?.plan ?? "HOME");
-    const flightHandled = await handleFlightAssistantRoute(
-      canonicalPhone,
-      transcription,
-      history,
-      audioCanSearchFlights,
-      {
-        messagePrefix: `🎤 _"${transcription}"_\n\n`,
-        userContextContent: `[áudio] ${transcription}`,
-      },
-    );
-    if (flightHandled) {
+    const culturalQuery = detectCulturalEventsQuery(transcription);
+    if (culturalQuery) {
+      if (!hasFullFeatures(audioClientProfile?.plan ?? "HOME")) {
+        const blocked = `🎤 _"${transcription}"_\n\n${buildCulturalPlanBlockMessage(canonicalPhone)}`;
+        await saveContext(canonicalPhone, [
+          ...history,
+          { role: "user", content: `[áudio] ${transcription}` },
+          { role: "assistant", content: blocked },
+        ]);
+        pendingNotice.cancel();
+        await sendMessage(canonicalPhone, blocked);
+        return;
+      }
+
+      const enderecoCliente = buildCulturalAddress(audioClientProfile);
+      const localidadeCliente = [audioClientProfile?.addressCity, audioClientProfile?.addressState]
+        .map((v) => String(v || "").trim())
+        .filter(Boolean)
+        .join(", ") || null;
+
+      const respostaCultural = await resolveCulturalEventsSafely({
+        termoBusca: culturalQuery.termoBusca,
+        cidadeOuEstado: culturalQuery.cidadeOuEstado || localidadeCliente,
+        filtroTempo: culturalQuery.filtroTempo,
+        buscaPorGeolocalizacao: culturalQuery.buscaPorGeolocalizacao,
+        cepOuEnderecoCliente: enderecoCliente,
+        phoneForLogs: canonicalPhone,
+      });
+
+      const response = `🎤 _"${transcription}"_\n\n${respostaCultural}`;
+      await saveContext(canonicalPhone, [
+        ...history,
+        { role: "user", content: `[áudio] ${transcription}` },
+        { role: "assistant", content: response },
+      ]);
       pendingNotice.cancel();
+      await sendMessage(canonicalPhone, response);
       return;
     }
   }
