@@ -21,6 +21,25 @@ export function buildMacroIndicatorsModelsBlock(compact = false): string {
   );
 }
 
+export function buildCulturalEventsModelsBlock(compact = false): string {
+  const indent = compact ? "   " : "";
+  const br = compact ? "\n" : "\n\n";
+
+  return (
+    `🎭 *Agenda cultural, eventos e música local:*${br}` +
+    `${indent}• _shows em São Paulo hoje_${br}` +
+    `${indent}• _teatro perto de mim_${br}` +
+    `${indent}• _agenda cultural no fim de semana em BH_${br}` +
+    `${indent}• _festivais em Recife_${br}` +
+    `${indent}• _eventos culturais amanhã em Curitiba_${br}` +
+    `${indent}• _museu em São Paulo_${br}` +
+    `${indent}• _exposições perto de mim_${br}` +
+    `${indent}• _cinema hoje em Fortaleza_${br}` +
+    `${indent}• _música ao vivo perto de mim_${br}` +
+    `_Plano Completo ou Travel. Funciona por texto ou áudio._`
+  );
+}
+
 export function buildFipeZapModelsBlock(compact = false): string {
   const indent = compact ? "   " : "";
   const br = compact ? "\n" : "\n\n";
@@ -86,6 +105,12 @@ export function buildFullPhraseModelsMessage(senderName?: string): string {
     `${buildFipeVehicleModelsBlock()}\n\n` +
     `${buildFipeZapModelsBlock()}\n\n` +
     `${buildFlightTravelExamplesBlock()}\n\n` +
+    `${buildCulturalEventsModelsBlock()}\n\n` +
+    `📦 *Mudança de plano:*\n` +
+    `• _quero mudar meu plano_\n` +
+    `• _quero trocar de plano, quais opções tenho?_\n` +
+    `• _quero mudar para completo_\n` +
+    `• _quero alterar para básico_\n\n` +
     `🛒 *Comparador de preços:*\n` +
     `• _comparar preço smart tv samsung 50 polegadas_\n` +
     `• _menor preço iphone 13 128gb_\n` +
@@ -110,6 +135,8 @@ export function buildHelpPhraseModelsPreview(): string {
     `${buildFipeVehicleModelsBlock(true)}\n\n` +
     `${buildFipeZapModelsBlock(true)}\n\n` +
     `${buildFlightTravelExamplesBlock(true)}\n\n` +
+    `${buildCulturalEventsModelsBlock(true)}\n\n` +
+    `📦 *Plano:* _quero mudar meu plano_ · _quero mudar para completo_\n\n` +
     `🛒 *Preços:* _comparar preço notebook i5_\n\n` +
     `🎤 *Áudio:* mesmas frases — ex.: _"cdi hoje"_, _"quero passagem barata"_, _"fipe gol 2020"_.\n\n` +
     `_Dica: escreva como fala no dia a dia._`
@@ -125,6 +152,7 @@ export function buildUnreadContentFallbackHints(): string {
     "• FipeZap: \"fipezap sao paulo venda\"\n" +
     "• FIPE: \"fipe gol 2018\"\n" +
     "• Viagens: \"quero passagem barata pro nordeste\"\n" +
-    "• Cotação: \"dólar hoje\", \"bitcoin\""
+    "• Cotação: \"dólar hoje\", \"bitcoin\"\n" +
+    "• Agenda cultural: \"shows em SP hoje\", \"teatro perto de mim\""
   );
 }

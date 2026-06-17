@@ -11,9 +11,9 @@ import { useState, useEffect } from 'react';
 
 const TAGLINE_SHORT = 'Finanças, nutrição, comercial e mais';
 const TAGLINE =
-  'Finanças, nutrição, comercial, mercado financeiro e muito mais — direto no WhatsApp';
+  'Finanças, nutrição, comercial, eventos, músicas, mercado financeiro e muito mais — direto no WhatsApp';
 const TAGLINE_FOOTER =
-  'Assistente para finanças, nutrição, comercial, mercado financeiro e muito mais, direto no WhatsApp.';
+  'Assistente para finanças, nutrição, comercial, eventos, músicas, mercado financeiro e muito mais, direto no WhatsApp.';
 
 export default function Home() {
   const [email, setEmail] = useState('');
@@ -137,7 +137,7 @@ export default function Home() {
               <div className="space-y-4 bg-blue-800/90 p-6 rounded-2xl border border-green-400 shadow-2xl">
                 <p className="text-lg">✅ Finanças, gastos, metas e investimentos pelo WhatsApp</p>
                 <p className="text-lg">✅ Apoio nutricional e orientação comercial no mesmo assistente</p>
-                <p className="text-lg">✅ Plano Completo com FIPE, mercado financeiro e criptomoedas</p>
+                <p className="text-lg">✅ Plano Completo com FIPE, mercado, criptomoedas, agenda cultural e música ao vivo na sua cidade</p>
                 <p className="text-lg">✅ Plano Padrão a partir de R$ 4,99/mês • Pix ou cartão</p>
               </div>
 
@@ -331,7 +331,7 @@ export default function Home() {
                 </li>
                 <li className="flex gap-3 text-green-900">
                   <span className="shrink-0 text-lg" aria-hidden>✅</span>
-                  <span><strong className="font-semibold">Mercado:</strong> FIPE, mercado financeiro e criptomoedas no Plano Completo.</span>
+                  <span><strong className="font-semibold">Mercado + Cultura:</strong> FIPE, mercado, criptomoedas e agenda cultural com eventos, shows, teatros e música ao vivo no Plano Completo.</span>
                 </li>
                 <li className="flex gap-3 text-green-900">
                   <span className="shrink-0 text-lg" aria-hidden>✅</span>
@@ -501,6 +501,16 @@ export default function Home() {
                 </div>
               </div>
             </div>
+
+            <div className="bg-blue-800 p-8 rounded-lg border-2 border-green-500">
+              <div className="flex items-start gap-4">
+                <div className="text-4xl">🎵</div>
+                <div>
+                  <h3 className="text-2xl font-bold mb-2">Eventos, Shows e Música</h3>
+                  <p>Descubra o melhor evento da sua cidade ou região, incluindo shows, teatros e música ao vivo</p>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -556,7 +566,7 @@ export default function Home() {
               <div className="mb-6">
                 <span className="bg-green-500 text-black px-3 py-1 rounded-full text-sm font-bold">Plano Completo</span>
                 <h3 className="text-3xl font-bold mt-4">Completo + mercado e FIPE</h3>
-                <p className="text-blue-100 mt-2">Tudo do Padrão, mais FIPE, mercado financeiro, criptomoedas e recursos avançados.</p>
+                <p className="text-blue-100 mt-2">Tudo do Padrão, mais FIPE, mercado financeiro, criptomoedas e agenda cultural para encontrar eventos, shows e música perto de você.</p>
               </div>
 
               <div className="mb-6">
@@ -569,6 +579,7 @@ export default function Home() {
                 <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-400 shrink-0" /> Consulta à Tabela FIPE</li>
                 <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-400 shrink-0" /> Dados de mercado financeiro</li>
                 <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-400 shrink-0" /> Informações sobre criptomoedas</li>
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-400 shrink-0" /> Agenda cultural por cidade ou perto de você (eventos, shows, teatros e música ao vivo)</li>
               </ul>
 
               <a href={whatsappLink} target="_blank" rel="noreferrer" className="block">
@@ -582,7 +593,7 @@ export default function Home() {
               <div className="mb-6">
                 <span className="bg-yellow-100 text-yellow-900 px-3 py-1 rounded-full text-sm font-bold">Plano Travel</span>
                 <h3 className="text-3xl font-bold mt-4">Completo + voos e viagens</h3>
-                <p className="text-gray-600 mt-2">Tudo do Completo com foco em mobilidade e pesquisa de voos para decisões rápidas.</p>
+                <p className="text-gray-600 mt-2">Tudo do Completo, incluindo agenda cultural e música, com foco em mobilidade e pesquisa de voos para decisões rápidas.</p>
               </div>
 
               <div className="mb-6">
@@ -593,6 +604,7 @@ export default function Home() {
               <ul className="space-y-3 text-gray-700 mb-8">
                 <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Tudo do Plano Completo</li>
                 <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Busca de voos nacionais por texto e áudio</li>
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Agenda cultural por cidade ou perto de você (eventos, shows, teatros e música ao vivo)</li>
                 <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Apoio para planejar deslocamentos</li>
                 <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Mais contexto para decisões de viagem</li>
               </ul>
@@ -688,7 +700,7 @@ export default function Home() {
               <summary className="font-bold text-lg text-blue-900">
                 📊 Qual a diferença entre os planos?
               </summary>
-              <p className="mt-4 text-gray-600">O Padrão cobre finanças, nutrição e comercial. O Completo adiciona Tabela FIPE, mercado financeiro e criptomoedas. O Travel inclui tudo do Completo + busca de voos.</p>
+              <p className="mt-4 text-gray-600">O Padrão cobre finanças, nutrição e comercial. O Completo adiciona Tabela FIPE, mercado financeiro, criptomoedas e agenda cultural (eventos, shows, teatros e música ao vivo). O Travel inclui tudo do Completo + busca de voos.</p>
             </details>
 
             <details className="bg-white p-6 rounded-lg border-2 border-blue-900 cursor-pointer">
@@ -718,11 +730,11 @@ export default function Home() {
       {/* Garantia */}
       <section className="bg-green-500 text-black py-12 md:py-16">
         <div className="container mx-auto px-4 text-center">
-          <h2 className="text-3xl md:text-4xl font-bold mb-4">
+            <h2 className="text-3xl md:text-4xl font-bold mb-4">
             ✅ Comece com um plano acessível
           </h2>
           <p className="text-lg">
-            Escolha entre Padrão (R$ 4,99), Completo (R$ 9,99) ou Travel (R$ 59,99), com pagamento por Pix ou cartão.
+            Escolha entre Padrão (R$ 4,99), Completo (R$ 9,99) ou Travel (R$ 59,99), com pagamento por Pix ou cartão e acesso a eventos, shows, teatro e música nos planos superiores.
           </p>
         </div>
       </section>
