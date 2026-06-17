@@ -79,9 +79,11 @@ export default function Home() {
             <span className="rounded-full border border-green-300 bg-green-100 px-3 py-1 text-xs font-bold text-green-700">
               PIX OU CARTÃO
             </span>
-            <Button className="bg-green-500 font-bold text-white hover:bg-green-600">
-              VER PLANOS
-            </Button>
+            <a href="#planos">
+              <Button className="bg-green-500 font-bold text-white hover:bg-green-600">
+                VER PLANOS
+              </Button>
+            </a>
           </div>
         </div>
       </header>
@@ -148,13 +150,15 @@ export default function Home() {
                     FALAR NO WHATSAPP <ArrowRight className="ml-2 w-5 h-5" />
                   </Button>
                 </a>
-                <Button 
-                  variant="outline" 
-                  size="lg"
-                  className="border-2 border-white text-white hover:bg-blue-700 font-bold h-14 px-8 rounded-lg text-lg"
-                >
-                  CONHECER RECURSOS
-                </Button>
+                <a href="#planos">
+                  <Button 
+                    variant="outline" 
+                    size="lg"
+                    className="border-2 border-white text-white hover:bg-blue-700 font-bold h-14 px-8 rounded-lg text-lg"
+                  >
+                    CONHECER RECURSOS
+                  </Button>
+                </a>
               </div>
 
               <p className="text-sm text-green-300 font-bold">
@@ -347,7 +351,7 @@ export default function Home() {
               </Button>
             </a>
             <a href="#planos" className="text-sm font-bold text-blue-900 underline-offset-4 hover:underline">
-              Comparar planos Padrão e Completo
+              Comparar planos Padrão, Completo e Travel
             </a>
           </div>
         </div>
@@ -517,7 +521,7 @@ export default function Home() {
             </p>
           </div>
 
-          <div className="grid md:grid-cols-2 gap-8 max-w-5xl mx-auto">
+          <div className="grid gap-8 md:grid-cols-3 max-w-6xl mx-auto">
             <div className="bg-white rounded-3xl border-2 border-blue-100 p-8 shadow-lg">
               <div className="mb-6">
                 <span className="bg-blue-100 text-blue-900 px-3 py-1 rounded-full text-sm font-bold">Plano Padrão</span>
@@ -570,6 +574,32 @@ export default function Home() {
               <a href={whatsappLink} target="_blank" rel="noreferrer" className="block">
                 <Button size="lg" className="w-full bg-green-500 hover:bg-green-600 text-black font-bold">
                   Assinar Completo por R$ 9,99
+                </Button>
+              </a>
+            </div>
+
+            <div className="bg-white rounded-3xl border-2 border-yellow-300 p-8 shadow-lg">
+              <div className="mb-6">
+                <span className="bg-yellow-100 text-yellow-900 px-3 py-1 rounded-full text-sm font-bold">Plano Travel</span>
+                <h3 className="text-3xl font-bold mt-4">Completo + voos e viagens</h3>
+                <p className="text-gray-600 mt-2">Tudo do Completo com foco em mobilidade e pesquisa de voos para decisões rápidas.</p>
+              </div>
+
+              <div className="mb-6">
+                <span className="text-5xl font-bold text-yellow-700">R$ 59,99</span>
+                <span className="text-gray-600">/mês</span>
+              </div>
+
+              <ul className="space-y-3 text-gray-700 mb-8">
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Tudo do Plano Completo</li>
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Busca de voos nacionais por texto e áudio</li>
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Apoio para planejar deslocamentos</li>
+                <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" /> Mais contexto para decisões de viagem</li>
+              </ul>
+
+              <a href={whatsappLink} target="_blank" rel="noreferrer" className="block">
+                <Button size="lg" className="w-full bg-yellow-500 hover:bg-yellow-600 text-black font-bold">
+                  Assinar Travel por R$ 59,99
                 </Button>
               </a>
             </div>
@@ -651,14 +681,14 @@ export default function Home() {
               <summary className="font-bold text-lg text-blue-900">
                 💳 Preciso de cartão de crédito?
               </summary>
-              <p className="mt-4 text-gray-600">Não. Você pode pagar por Pix ou cartão de crédito. O Plano Padrão custa R$ 4,99/mês e o Plano Completo custa R$ 9,99/mês.</p>
+              <p className="mt-4 text-gray-600">Não. Você pode pagar por Pix ou cartão de crédito. O Plano Padrão custa R$ 4,99/mês, o Completo custa R$ 9,99/mês e o Travel custa R$ 59,99/mês.</p>
             </details>
 
             <details className="bg-white p-6 rounded-lg border-2 border-blue-900 cursor-pointer">
               <summary className="font-bold text-lg text-blue-900">
                 📊 Qual a diferença entre os planos?
               </summary>
-              <p className="mt-4 text-gray-600">O Padrão cobre finanças, nutrição e comercial pelo WhatsApp. O Completo adiciona Tabela FIPE, mercado financeiro, criptomoedas e recursos avançados.</p>
+              <p className="mt-4 text-gray-600">O Padrão cobre finanças, nutrição e comercial. O Completo adiciona Tabela FIPE, mercado financeiro e criptomoedas. O Travel inclui tudo do Completo + busca de voos.</p>
             </details>
 
             <details className="bg-white p-6 rounded-lg border-2 border-blue-900 cursor-pointer">
@@ -692,7 +722,7 @@ export default function Home() {
             ✅ Comece com um plano acessível
           </h2>
           <p className="text-lg">
-            Escolha entre R$ 4,99/mês no Padrão ou R$ 9,99/mês no Completo, com pagamento por Pix ou cartão.
+            Escolha entre Padrão (R$ 4,99), Completo (R$ 9,99) ou Travel (R$ 59,99), com pagamento por Pix ou cartão.
           </p>
         </div>
       </section>
@@ -731,7 +761,7 @@ export default function Home() {
           </div>
 
           <p className="text-sm text-green-300 font-bold">
-            ✨ Plano Padrão R$ 4,99 • Completo R$ 9,99 • Pix ou cartão
+            ✨ Plano Padrão R$ 4,99 • Completo R$ 9,99 • Travel R$ 59,99 • Pix ou cartão
           </p>
 
           <div className="mt-12 grid gap-6 text-center md:grid-cols-3">
