@@ -150,7 +150,8 @@ async function sendPlanOptions(phone: string) {
     "🎯 *Escolha o seu plano:*\n\n" +
       `1️⃣ *BÁSICO* — R$ ${fmt("HOME", "4,90")}/mês\n   Contas a pagar/receber (PF e PJ)\n   _Sem FIPE e sem Mercado Financeiro_\n\n` +
       `2️⃣ *COMPLETO* — R$ ${fmt("FULL", "9,90")}/mês\n   FIPE, FipeZap, mercado, IPCA/CDI e mais\n\n` +
-      "Digite *1* ou *2*:"
+      `3️⃣ *TRAVEL* — R$ ${fmt("TRAVEL", "59,90")}/mês\n   Tudo do Completo + busca de voos\n\n` +
+      "Digite *1*, *2* ou *3*:"
   );
 }
 
@@ -551,16 +552,17 @@ async function handleOnboarding(
 
     case "plan": {
       const choice = trimmed.replace(/\D/g, "");
-      const planMap: Record<string, { plan: "HOME" | "FULL"; context: "PESSOAL" | "COMERCIAL" }> = {
+      const planMap: Record<string, { plan: "HOME" | "FULL" | "TRAVEL"; context: "PESSOAL" | "COMERCIAL" }> = {
         "1": { plan: "HOME", context: "PESSOAL" },
         "2": { plan: "FULL", context: "PESSOAL" },
+        "3": { plan: "TRAVEL", context: "PESSOAL" },
       };
       const selected = planMap[choice];
       if (!selected) {
-        await sendMessage(phone, "❌ Opção inválida. Digite *1* ou *2*:");
+        await sendMessage(phone, "❌ Opção inválida. Digite *1*, *2* ou *3*:");
         return true;
       }
-      const defaultPrices = { HOME: 4.9, FULL: 9.9 };
+      const defaultPrices = { HOME: 4.9, FULL: 9.9, TRAVEL: 59.9 };
       const dbPlan = await prisma.subscriptionPlan.findUnique({ where: { plan: selected.plan } });
       const price = dbPlan ? Number(dbPlan.priceMonthly) : defaultPrices[selected.plan];
       const priceStr = price.toFixed(2).replace(".", ",");
