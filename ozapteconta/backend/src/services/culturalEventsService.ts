@@ -15,25 +15,20 @@ const CADEIAS_INSTANCIA_POR_APELIDO: Record<string, string[]> = {
   pe: ["https://www.mapacultural.pe.gov.br"],
   pernambuco: ["https://www.mapacultural.pe.gov.br"],
   recife: ["https://www.mapacultural.pe.gov.br"],
-  bh: [
-    "https://mapaculturalbh.pbh.gov.br",
-    "https://mapacultural.santaluzia.mg.gov.br",
-    "https://mapacultural.ipatinga.mg.gov.br",
-  ],
-  "belo horizonte": [
-    "https://mapaculturalbh.pbh.gov.br",
-    "https://mapacultural.santaluzia.mg.gov.br",
-    "https://mapacultural.ipatinga.mg.gov.br",
-  ],
-  mg: ["https://mapacultural.santaluzia.mg.gov.br", "https://mapacultural.ipatinga.mg.gov.br"],
-  "minas gerais": ["https://mapacultural.santaluzia.mg.gov.br", "https://mapacultural.ipatinga.mg.gov.br"],
+  bh: ["https://mapaculturalbh.pbh.gov.br"],
+  "belo horizonte": ["https://mapaculturalbh.pbh.gov.br"],
+  mg: ["https://mapas.cultura.gov.br", "https://mapacultural.santaluzia.mg.gov.br", "https://mapacultural.ipatinga.mg.gov.br"],
+  "minas gerais": ["https://mapas.cultura.gov.br", "https://mapacultural.santaluzia.mg.gov.br", "https://mapacultural.ipatinga.mg.gov.br"],
   ce: ["https://mapacultural.secult.ce.gov.br", "https://cultura.sobral.ce.gov.br"],
   ceara: ["https://mapacultural.secult.ce.gov.br"],
   fortaleza: ["https://mapacultural.secult.ce.gov.br"],
   mt: ["https://mapas.mt.gov.br"],
   ap: ["https://mapacultural.ap.gov.br"],
   rs: ["https://mapa.cultura.rs.gov.br"],
+  rj: ["https://mapas.cultura.gov.br"],
+  "rio de janeiro": ["https://mapas.cultura.gov.br"],
   nacional: ["https://mapas.cultura.gov.br"],
+  brasil: ["https://mapas.cultura.gov.br"],
 };
 
 /** Último recurso quando a cidade não tem mapa local configurado. */
@@ -67,6 +62,8 @@ export interface ConsultaCulturalDetectada {
   buscaPorGeolocalizacao: boolean;
 }
 
+type EscopoLocalidadeCultural = "cidade" | "estado" | "pais";
+
 type OcorrenciaCultural = {
   space?: { name?: string };
   rule?: { description?: string } | string;
@@ -88,6 +85,39 @@ const cacheResultadosCulturais = new Map<string, { timestamp: number; dados: str
 const TEMPO_CACHE_MS = 15 * 60 * 1000;
 const LIMITE_PADRAO = 5;
 const TIMEOUT_MS = 12_000;
+const RAIO_LOCAL_CIDADE_M = 25_000;
+const RAIO_LOCAL_ESTADO_M = 450_000;
+const RAIO_LOCAL_PAIS_M = 3_000_000;
+const RAIO_LOCAL_CLIENTE_M = 10_000;
+const ESTADOS_BRASIL = [
+  { uf: "AC", nome: "acre", aliases: ["acre", "ac"] },
+  { uf: "AL", nome: "alagoas", aliases: ["alagoas", "al"] },
+  { uf: "AP", nome: "amapa", aliases: ["amapa", "ap"] },
+  { uf: "AM", nome: "amazonas", aliases: ["amazonas", "am"] },
+  { uf: "BA", nome: "bahia", aliases: ["bahia", "ba"] },
+  { uf: "CE", nome: "ceara", aliases: ["ceara", "ce"] },
+  { uf: "DF", nome: "distrito federal", aliases: ["distrito federal", "df", "brasilia", "brasília"] },
+  { uf: "ES", nome: "espirito santo", aliases: ["espirito santo", "es"] },
+  { uf: "GO", nome: "goias", aliases: ["goias", "go"] },
+  { uf: "MA", nome: "maranhao", aliases: ["maranhao", "ma"] },
+  { uf: "MT", nome: "mato grosso", aliases: ["mato grosso", "mt"] },
+  { uf: "MS", nome: "mato grosso do sul", aliases: ["mato grosso do sul", "ms"] },
+  { uf: "MG", nome: "minas gerais", aliases: ["minas gerais", "mg"] },
+  { uf: "PA", nome: "para", aliases: ["para", "pa"] },
+  { uf: "PB", nome: "paraiba", aliases: ["paraiba", "pb"] },
+  { uf: "PR", nome: "parana", aliases: ["parana", "pr"] },
+  { uf: "PE", nome: "pernambuco", aliases: ["pernambuco", "pe"] },
+  { uf: "PI", nome: "piaui", aliases: ["piaui", "pi"] },
+  { uf: "RJ", nome: "rio de janeiro", aliases: ["rio de janeiro", "rj"] },
+  { uf: "RN", nome: "rio grande do norte", aliases: ["rio grande do norte", "rn"] },
+  { uf: "RS", nome: "rio grande do sul", aliases: ["rio grande do sul", "rs"] },
+  { uf: "RO", nome: "rondonia", aliases: ["rondonia", "ro"] },
+  { uf: "RR", nome: "roraima", aliases: ["roraima", "rr"] },
+  { uf: "SC", nome: "santa catarina", aliases: ["santa catarina", "sc"] },
+  { uf: "SP", nome: "sao paulo", aliases: ["sao paulo", "sp"] },
+  { uf: "SE", nome: "sergipe", aliases: ["sergipe", "se"] },
+  { uf: "TO", nome: "tocantins", aliases: ["tocantins", "to"] },
+] as const;
 
 function normalizarTexto(valor: string): string {
   return String(valor || "")
@@ -119,18 +149,42 @@ function pickCidadeOuEstado(textoOriginal: string): string | null {
   const texto = String(textoOriginal || "").trim();
   if (!texto) return null;
 
-  const match = texto.match(/\bem\s+([A-Za-zÀ-ÿ\s]{2,60})(?:$|\?|\.|,)/i);
+  const padroes = [
+    /\b(?:na cidade de|no municipio de|no município de|no estado de|no estado do|na regiao de|na região de|em|na|no)\s+([A-Za-zÀ-ÿ\s]{2,60})(?=(?:\s+(?:hoje|amanh[aã]|agora|nesta noite|essa noite|no fim de semana|fim de semana|fds|sabado|sábado|domingo))?(?:$|\?|\.|,|!))/i,
+  ];
+  const match = padroes.map((padrao) => texto.match(padrao)).find((resultado) => Boolean(resultado?.[1]));
   if (!match?.[1]) return null;
 
   const local = match[1]
     .replace(/amanhã/gi, "")
     .replace(/\b(hoje|amanha|fim de semana|nesta noite|essa noite)\b/gi, "")
+    .replace(/\b(?:cidade|municipio|município|estado|regiao|região)\b/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 
   if (!local) return null;
   if (/\b(perto de mim|minha regiao|minha região|aqui)\b/i.test(local)) return null;
   return local;
+}
+
+function ehLocalidadePais(localidade: string | null): boolean {
+  const normalizado = normalizarTexto(localidade || "");
+  return normalizado === "brasil" || normalizado === "nacional" || normalizado === "todo o brasil";
+}
+
+function ehAliasEstado(localidade: string | null): boolean {
+  const normalizado = normalizarTexto(localidade || "")
+    .replace(/^estado\s+(?:de|do)\s+/, "")
+    .trim();
+
+  return ESTADOS_BRASIL.some((estado) => estado.aliases.some((alias) => alias === normalizado));
+}
+
+function inferirEscopoLocalidade(localidade: string | null): EscopoLocalidadeCultural | null {
+  if (!localidade) return null;
+  if (ehLocalidadePais(localidade)) return "pais";
+  if (ehAliasEstado(localidade)) return "estado";
+  return "cidade";
 }
 
 export function detectCulturalEventsQuery(text: string): ConsultaCulturalDetectada | null {
@@ -155,6 +209,7 @@ export function detectCulturalEventsQuery(text: string): ConsultaCulturalDetecta
 function resolverCadeiaInstancias(localidadeRequisitada: string | null): string[] {
   const cadeia: string[] = [];
   const visto = new Set<string>();
+  const escopoLocalidade = inferirEscopoLocalidade(localidadeRequisitada);
 
   const incluir = (urls: string[]) => {
     for (const url of urls) {
@@ -168,12 +223,30 @@ function resolverCadeiaInstancias(localidadeRequisitada: string | null): string[
 
   if (localidadeRequisitada) {
     const normalizado = normalizarTexto(localidadeRequisitada);
+    const normalizadoSemUf = normalizado.replace(/,\s*[a-z]{2}$/, "").trim();
     const apelidosOrdenados = Object.keys(CADEIAS_INSTANCIA_POR_APELIDO).sort(
       (left, right) => right.length - left.length,
     );
-    for (const apelido of apelidosOrdenados) {
-      if (normalizado.includes(apelido)) {
-        incluir(CADEIAS_INSTANCIA_POR_APELIDO[apelido]);
+
+    if (ehLocalidadePais(localidadeRequisitada)) {
+      incluir(CADEIAS_INSTANCIA_POR_APELIDO.nacional);
+    }
+
+    if (escopoLocalidade === "cidade") {
+      for (const apelido of apelidosOrdenados) {
+        if (normalizado === apelido || normalizadoSemUf === apelido) {
+          incluir(CADEIAS_INSTANCIA_POR_APELIDO[apelido]);
+        }
+      }
+    }
+
+    if (escopoLocalidade !== "cidade") {
+      for (const apelido of apelidosOrdenados) {
+        const correspondeExatamente = normalizado === apelido || normalizado.startsWith(`${apelido},`);
+        if (escopoLocalidade === "estado" && !correspondeExatamente) continue;
+        if (normalizado.includes(apelido)) {
+          incluir(CADEIAS_INSTANCIA_POR_APELIDO[apelido]);
+        }
       }
     }
   }
@@ -383,10 +456,11 @@ function montarUrlConsulta(
     url.searchParams.set("name", `LIKE(*${termoBusca}*)`);
   }
 
-  if (parametros.buscaPorGeolocalizacao && coordenadas) {
+  const raioBusca = calcularRaioBuscaMetros(parametros);
+  if (coordenadas && raioBusca) {
     url.searchParams.set(
       "_geoLocation",
-      `GEONEAR(${coordenadas.lng},${coordenadas.lat},10000)`,
+      `GEONEAR(${coordenadas.lng},${coordenadas.lat},${raioBusca})`,
     );
   }
 
@@ -430,14 +504,30 @@ async function consultarInstancia(
 }
 
 async function resolverCoordenadas(parametros: ParametrosConsultaCultural): Promise<{ lat: number; lng: number } | null> {
-  if (!parametros.buscaPorGeolocalizacao || !parametros.cepOuEnderecoCliente) return null;
+  const consultaGeolocalizada = parametros.buscaPorGeolocalizacao && parametros.cepOuEnderecoCliente;
+  const consultaPorLocalidade = !parametros.buscaPorGeolocalizacao && parametros.cidadeOuEstado;
+  if (!consultaGeolocalizada && !consultaPorLocalidade) return null;
+
+  const localidadeConsulta = consultaGeolocalizada
+    ? parametros.cepOuEnderecoCliente
+    : `${parametros.cidadeOuEstado}, Brasil`;
 
   try {
-    return await obterCoordenadasPorCepOuEndereco(parametros.cepOuEnderecoCliente);
+    return await obterCoordenadasPorCepOuEndereco(String(localidadeConsulta || ""));
   } catch (err) {
     logger.warn(`[cultural-events] geocode falhou: ${String(err)}`);
     return null;
   }
+}
+
+function calcularRaioBuscaMetros(parametros: ParametrosConsultaCultural): number | null {
+  if (parametros.buscaPorGeolocalizacao) return RAIO_LOCAL_CLIENTE_M;
+
+  const escopoLocalidade = inferirEscopoLocalidade(parametros.cidadeOuEstado);
+  if (escopoLocalidade === "cidade") return RAIO_LOCAL_CIDADE_M;
+  if (escopoLocalidade === "estado") return RAIO_LOCAL_ESTADO_M;
+  if (escopoLocalidade === "pais") return RAIO_LOCAL_PAIS_M;
+  return null;
 }
 
 export async function buscarEventosCulturais(parametros: ParametrosConsultaCultural): Promise<string> {
@@ -484,6 +574,10 @@ export async function buscarEventosCulturais(parametros: ParametrosConsultaCultu
 /** Exposto para testes — valida cadeia de fallback por localidade. */
 export function resolverCadeiaInstanciasParaTeste(localidade: string | null): string[] {
   return resolverCadeiaInstancias(localidade);
+}
+
+export function inferirEscopoLocalidadeParaTeste(localidade: string | null): EscopoLocalidadeCultural | null {
+  return inferirEscopoLocalidade(localidade);
 }
 
 export { ErroBuscaCultural };
